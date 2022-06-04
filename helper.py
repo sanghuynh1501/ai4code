@@ -27,7 +27,7 @@ def shuffe_data(a, b):
     a = a[indices]
     b = b[indices]
 
-    return a, b
+    return a.tolist(), b.tolist()
 
 
 def re_ranking_list(ids):
@@ -63,8 +63,8 @@ def generate_data(df, mode='train'):
 def generate_data_sigmoid(df, mode='train'):
     data = []
 
-    random_drop = np.random.random(size=10000) > 0.9
-    count = 0
+    # random_drop = np.random.random(size=10000) > 0.9
+    # count = 0
 
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
@@ -73,19 +73,31 @@ def generate_data_sigmoid(df, mode='train'):
             source, rank = shuffe_data(source, rank)
         if len(source) > 1:
             if len(source) == 2:
-                if rank[0] < rank[1]:
+                if rank[0] > rank[1]:
                     data.append([source[0], source[1], 1])
+                    data.append([source[1], source[0], 0])
                 else:
                     data.append([source[1], source[0], 1])
-                count += 1
+                    data.append([source[0], source[1], 0])
             else:
                 for i in range(0, len(source), 1):
                     for j in range(0, len(source), 1):
-                        count += 1
-                        if rank[i] + 1 == rank[j]:
+                        if rank[i] > rank[j]:
                             data.append([source[i], source[j], 1])
-                        elif random_drop[count % 10000]:
+                        else:
                             data.append([source[i], source[j], 0])
+
+    return data
+
+
+def generate_data_test(df):
+    data = []
+
+    for id, df_tmp in tqdm(df.groupby('id')):
+        source = df_tmp['cell_id'].to_list()
+        for i in range(len(source)):
+            for j in range(len(source)):
+                data.append([source[i], source[j]])
 
     return data
 
@@ -157,34 +169,16 @@ def map_result(ids, results):
     return result_obj
 
 
-def sort_source(source, ids, true_object):
+def sort_source(source, true_object):
 
-    def sort_by_object(e):
-        if e not in true_object:
-            return float('-inf')
-        return true_object[e]
+    sorted_source = source.copy()
 
-    ids.sort(reverse=True, key=sort_by_object)
-    ids = ids[:len(source) - 1]
-
-    two_step = [key[8:] for key in ids]
-
-    first_id = source[0]
-    for id in source:
-        if id not in two_step:
-            first_id = id
-
-    sorted_source = [first_id]
-    for _ in range(len(source)):
-        for id in source:
-            if f'{first_id}{id}' in ids:
-                if id not in sorted_source:
-                    sorted_source.append(id)
-                    first_id = id
-
-    for sr in source:
-        if sr not in sorted_source:
-            sorted_source.append(sr)
+    for i in range(0, len(sorted_source)):
+        for j in range(i+1, len(sorted_source)):
+            if true_object[f'{sorted_source[i]}{sorted_source[j]}'] > 0.5:
+                temp = sorted_source[i]
+                sorted_source[i] = sorted_source[j]
+                sorted_source[j] = temp
 
     return [sorted_source.index(s) for s in source]
 
@@ -194,21 +188,17 @@ def check_rank(df, true_object):
     pred_ranks = []
     total = 0
     for _, df_tmp in tqdm(df.groupby('id')):
+
         source = df_tmp['cell_id'].to_list()
-
-        ids = []
-        for i in range(len(source)):
-            for j in range(len(source)):
-                ids.append(f'{source[i]}{source[j]}')
-
         rank = re_ranking_list(df_tmp['rank'].to_list())
-        pred_rank = sort_source(source, ids, true_object)
+        source, rank = shuffe_data(source, rank)
+
+        pred_rank = sort_source(source, true_object)
 
         ranks.append(rank)
         pred_ranks.append(pred_rank)
 
         if total < 32:
-            print('================================================')
             print(rank)
             print(pred_rank)
         total += 1

@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from config import BS, MAX_LEN, NVALID, NW
-from dataset import MarkdownDataset
-from helper import adjust_lr, check_rank, generate_data_sigmoid, map_result
+from dataset import DatasetTest, MarkdownDataset
+from helper import adjust_lr, check_rank, generate_data_sigmoid, generate_data_test, map_result
 from model import MarkdownModel
 
 device = 'cuda'
@@ -18,6 +18,7 @@ torch.manual_seed(0)
 
 
 net = MarkdownModel().to(device)
+# net.load_state_dict(torch.load('code_model.pth'))
 criterion = torch.nn.BCELoss()
 optimizer = optim.Adam(net.parameters())
 
@@ -58,7 +59,7 @@ df_size = df.groupby(['id']).size().to_frame()
 df_size.columns = ['size']
 df_size = df_size[df_size['size'] <= 78]
 df_size.reset_index(inplace=True)
-df_size = df_size[:1000]
+df_size = df_size[:100]
 
 concat_df_size = []
 for i in range(78):
@@ -76,6 +77,7 @@ val_df = df.loc[val_ind].reset_index(drop=True)
 
 data = generate_data_sigmoid(train_df, 'train')
 val_data = generate_data_sigmoid(val_df, 'test')
+test_data = generate_data_test(val_df)
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
@@ -86,6 +88,8 @@ train_ds = MarkdownDataset(
     data, dict_cellid_source_train, MAX_LEN)
 val_ds = MarkdownDataset(
     val_data, dict_cellid_source_val, MAX_LEN)
+test_ds = DatasetTest(
+    test_data, dict_cellid_source_val, MAX_LEN)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
@@ -93,6 +97,8 @@ train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
+test_loader = DataLoader(test_ds, batch_size=BS * 4, shuffle=False,
+                         num_workers=NW, pin_memory=False, drop_last=False)
 
 EPOCHS = 200
 max_test_tau = 0
@@ -126,27 +132,38 @@ for epoch in range(EPOCHS):
     net.eval()
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
-            for ids, mask, labels, id_infoes in val_loader:
+            for ids, mask, labels, _ in val_loader:
                 loss = test_step(ids.to(device), mask.to(
                     device), labels.to(device))
                 test_loss += loss * BS
 
                 predicts = predict(ids.to(device), mask.to(
                     device)).detach().cpu().numpy()[:, 0]
+
                 test_trues += labels.cpu().numpy().tolist()
-                id_info_list += id_infoes.cpu().numpy().tolist()
-                test_preds += predicts.tolist()
                 total_true += np.sum(labels.cpu().numpy()
                                      [:, 0] == convert_result(predicts)).astype(np.int8)
 
                 pbar.update(len(ids))
 
-    result_obj = map_result(id_info_list, test_preds)
+    net.eval()
+    with torch.no_grad():
+        with tqdm(total=len(test_ds)) as pbar:
+            for ids, mask, id_infoes in test_loader:
 
+                predicts = predict(ids.to(device), mask.to(
+                    device)).detach().cpu().numpy()[:, 0]
+
+                id_info_list += id_infoes.cpu().numpy().tolist()
+                test_preds += predicts.tolist()
+
+                pbar.update(len(ids))
+
+    result_obj = map_result(id_info_list, test_preds)
     test_tau = check_rank(val_df, result_obj)
     test_accuracy = (total_true / len(test_trues))
 
-    torch.save(net.state_dict(), 'weights/code_model.pth')
+    # torch.save(net.state_dict(), 'weights/code_model.pth')
 
     print(
         f'Epoch {epoch + 1}, \n'

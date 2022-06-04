@@ -3,51 +3,37 @@ from torch import nn
 from transformers import AutoModel
 
 
-class RankingModel(nn.Module):
+class ScoreModel(nn.Module):
     def __init__(self):
-        super(RankingModel, self).__init__()
-        self.distill_bert = AutoModel.from_pretrained('weights/mymodelpairbertsmallpretrained/models/checkpoint-120000')
-        # self.distill_bert = AutoModel.from_pretrained('weights/mymodelpairbertsmallpretrained/models/checkpoint-120000')
-        self.top = nn.Linear(512, 1)
-
+        super(ScoreModel, self).__init__()
+        self.distill_bert = AutoModel.from_pretrained(
+            'distilbert-base-uncased')
+        self.top = nn.Linear(768, 32)
         self.dropout = nn.Dropout(0.2)
-        self.relu = torch.nn.ReLU()
-        
+        self.relu = nn.ReLU()
+
     def forward(self, ids, mask):
-        batch_size = len(ids)
-        
-        ids = ids.view(batch_size * 2, -1)
-        mask = mask.view(batch_size * 2, -1)
-        
         x = self.distill_bert(ids, mask)[0]
-        x = x.view(batch_size, 2, 128, -1)
         x = self.dropout(x)
-        x = self.top(x[:, :, 0, :])
-        x = torch.squeeze(x)
+        x = self.relu(self.top(x[:, 0, :]))
         return x
 
 
 class MarkdownModel(nn.Module):
     def __init__(self):
         super(MarkdownModel, self).__init__()
-        self.distill_bert = AutoModel.from_pretrained('distilbert-base-uncased')
-        self.top = nn.Linear(768, 1)
+        self.score_model = ScoreModel()
+        self.top = nn.Linear(32, 1)
 
-        self.dropout = nn.Dropout(0.25)
-        
     def forward(self, ids, mask):
-        x = self.distill_bert(ids, mask)[0]
-        x = self.dropout(x)
-        x = self.top(x[:, 0, :])
-        x = torch.sigmoid(x) 
-        return x
+        left_ids = ids[:, 0, :]
+        right_ids = ids[:, 1, :]
 
+        left_mask = mask[:, 0, :]
+        right_mask = mask[:, 1, :]
 
-if __name__ == '__main__':
-    ids = torch.ones(64, 2, 128).long()
-    masks = torch.ones(64, 2, 128).long()
+        left = self.score_model(left_ids, left_mask)
+        right = self.score_model(right_ids, right_mask)
+        distance = torch.subtract(left, right, alpha=1)
 
-    model = RankingModel()
-    out = model(ids, masks)
-
-    print(out.shape)
+        return torch.sigmoid(self.top(distance))
