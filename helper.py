@@ -1,0 +1,245 @@
+import re
+import string
+from bisect import bisect
+
+import nltk
+import numpy as np
+import pandas as pd
+from nltk.stem import WordNetLemmatizer
+from tqdm import tqdm
+from wordcloud import STOPWORDS
+
+from config import alphabet
+
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+stemmer = WordNetLemmatizer()
+stopwords = set(STOPWORDS)
+
+
+def shuffe_data(a, b):
+    a = np.array(a)
+    b = np.array(b)
+
+    indices = np.arange(a.shape[0])
+    np.random.shuffle(indices)
+
+    a = a[indices]
+    b = b[indices]
+
+    return a, b
+
+
+def re_ranking_list(ids):
+    sort_ids = ids.copy()
+    sort_ids.sort()
+    return [sort_ids.index(i) for i in ids]
+
+
+def generate_data(df, mode='train'):
+    data = []
+    for id, df_tmp in tqdm(df.groupby('id')):
+        source = df_tmp['cell_id'].to_list()
+        rank = re_ranking_list(df_tmp['rank'].to_list())
+        if mode == 'train':
+            source, rank = shuffe_data(source, rank)
+        if len(source) > 1:
+            if len(source) == 2:
+                if rank[0] < rank[1]:
+                    data.append([source[0], source[1], 0, 1])
+                else:
+                    data.append([source[0], source[1], 1, 0])
+            else:
+                for i in range(0, len(source) - 1, 1):
+                    for j in range(i + 1, len(source), 1):
+                        if rank[i] < rank[j]:
+                            data.append([source[i], source[j], 0, 1])
+                        else:
+                            data.append([source[i], source[j], 1, 0])
+
+    return data
+
+
+def generate_data_sigmoid(df, mode='train'):
+    data = []
+
+    random_drop = np.random.random(size=10000) > 0.9
+    count = 0
+
+    for id, df_tmp in tqdm(df.groupby('id')):
+        source = df_tmp['cell_id'].to_list()
+        rank = re_ranking_list(df_tmp['rank'].to_list())
+        if mode == 'train':
+            source, rank = shuffe_data(source, rank)
+        if len(source) > 1:
+            if len(source) == 2:
+                if rank[0] < rank[1]:
+                    data.append([source[0], source[1], 1])
+                else:
+                    data.append([source[1], source[0], 1])
+                count += 1
+            else:
+                for i in range(0, len(source), 1):
+                    for j in range(0, len(source), 1):
+                        count += 1
+                        if rank[i] + 1 == rank[j]:
+                            data.append([source[i], source[j], 1])
+                        elif random_drop[count % 10000]:
+                            data.append([source[i], source[j], 0])
+
+    return data
+
+
+def preprocess_text(document):
+    # Remove all the special characters
+    document = re.sub(r'\W', ' ', str(document))
+
+    # remove all single characters
+    document = re.sub(r'\s+[a-zA-Z]\s+', ' ', document)
+
+    # Remove single characters from the start
+    document = re.sub(r'\^[a-zA-Z]\s+', ' ', document)
+
+    # Substituting multiple spaces with single space
+    document = re.sub(r'\s+', ' ', document, flags=re.I)
+
+    # Removing prefixed 'b'
+    document = re.sub(r'^b\s+', '', document)
+
+    # Converting to Lowercase
+    document = document.lower()
+    # return document
+
+    # Lemmatization
+    tokens = document.split()
+    tokens = [stemmer.lemmatize(word) for word in tokens]
+    tokens = [word for word in tokens if len(word) > 3]
+
+    preprocessed_text = ' '.join(tokens)
+    return preprocessed_text
+
+
+def check_english(document):
+    document = str(document)
+    for char in document:
+        if char not in list(string.ascii_lowercase) and char not in list(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) and char != ' ':
+            return 'other'
+    return 'en'
+
+
+def count_inversions(a):
+    inversions = 0
+    sorted_so_far = []
+    for i, u in enumerate(a):  # O(N)
+        j = bisect(sorted_so_far, u)  # O(log N)
+        inversions += i - j
+        sorted_so_far.insert(j, u)  # O(N)
+    return inversions
+
+
+def kendall_tau(ground_truth, predictions):
+    total_inversions = 0  # total inversions in predicted ranks across all instances
+    total_2max = 0  # maximum possible inversions across all instances
+    for gt, pred in zip(ground_truth, predictions):
+        # rank predicted order in terms of ground truth
+        ranks = [gt.index(x) for x in pred]
+        total_inversions += count_inversions(ranks)
+        n = len(gt)
+        total_2max += n * (n - 1)
+    return 1 - 4 * total_inversions / total_2max
+
+
+def map_result(ids, results):
+    result_obj = {}
+    for id, result in zip(ids, results):
+        id = [''.join([alphabet[i] for i in s]) for s in id]
+        result_obj[f'{id[0]}{id[1]}'] = result
+    return result_obj
+
+
+def sort_source(source, ids, true_object):
+
+    def sort_by_object(e):
+        if e not in true_object:
+            return float('-inf')
+        return true_object[e]
+
+    ids.sort(reverse=True, key=sort_by_object)
+    ids = ids[:len(source) - 1]
+
+    two_step = [key[8:] for key in ids]
+
+    first_id = source[0]
+    for id in source:
+        if id not in two_step:
+            first_id = id
+
+    sorted_source = [first_id]
+    for _ in range(len(source)):
+        for id in source:
+            if f'{first_id}{id}' in ids:
+                if id not in sorted_source:
+                    sorted_source.append(id)
+                    first_id = id
+
+    for sr in source:
+        if sr not in sorted_source:
+            sorted_source.append(sr)
+
+    return [sorted_source.index(s) for s in source]
+
+
+def check_rank(df, true_object):
+    ranks = []
+    pred_ranks = []
+    total = 0
+    for _, df_tmp in tqdm(df.groupby('id')):
+        source = df_tmp['cell_id'].to_list()
+
+        ids = []
+        for i in range(len(source)):
+            for j in range(len(source)):
+                ids.append(f'{source[i]}{source[j]}')
+
+        rank = re_ranking_list(df_tmp['rank'].to_list())
+        pred_rank = sort_source(source, ids, true_object)
+
+        ranks.append(rank)
+        pred_ranks.append(pred_rank)
+
+        if total < 32:
+            print('================================================')
+            print(rank)
+            print(pred_rank)
+        total += 1
+
+    return kendall_tau(ranks, pred_ranks)
+
+
+def read_notebook(path):
+    return (
+        pd.read_json(
+            path,
+            dtype={'cell_type': 'category', 'source': 'str'})
+        .assign(id=path.stem)
+        .rename_axis('cell_id')
+    )
+
+
+def get_ranks(base, derived):
+    return [base.index(d) for d in derived]
+
+
+def adjust_lr(optimizer, epoch):
+    if epoch < 1:
+        lr = 5e-5
+    elif epoch < 2:
+        lr = 5e-5
+    elif epoch < 5:
+        lr = 5e-5
+    else:
+        lr = 5e-5
+
+    for p in optimizer.param_groups:
+        p['lr'] = lr
+    return lr
