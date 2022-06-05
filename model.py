@@ -8,14 +8,17 @@ class ScoreModel(nn.Module):
         super(ScoreModel, self).__init__()
         self.distill_bert = AutoModel.from_pretrained(
             'distilbert-base-uncased')
-        self.top = nn.Linear(768, 32)
+
+        for param in self.distill_bert.parameters():
+            param.requires_grad = False
+
+        self.out = nn.Linear(768, 1)
         self.dropout = nn.Dropout(0.2)
-        self.relu = nn.ReLU()
 
     def forward(self, ids, mask):
         x = self.distill_bert(ids, mask)[0]
-        x = self.dropout(x)
-        x = self.relu(self.top(x[:, 0, :]))
+        # x = self.dropout(x)
+        x = self.out(x[:, 0, :])
         return x
 
 
@@ -23,7 +26,6 @@ class MarkdownModel(nn.Module):
     def __init__(self):
         super(MarkdownModel, self).__init__()
         self.score_model = ScoreModel()
-        self.top = nn.Linear(32, 1)
 
     def forward(self, ids, mask):
         left_ids = ids[:, 0, :]
@@ -34,6 +36,12 @@ class MarkdownModel(nn.Module):
 
         left = self.score_model(left_ids, left_mask)
         right = self.score_model(right_ids, right_mask)
+
         distance = torch.subtract(left, right, alpha=1)
 
-        return torch.sigmoid(self.top(distance))
+        return torch.sigmoid(distance)
+
+    def score(self, ids, mask):
+        score = self.score_model(ids, mask)
+
+        return score

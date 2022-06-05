@@ -1,3 +1,4 @@
+import random
 import re
 import string
 from bisect import bisect
@@ -36,58 +37,34 @@ def re_ranking_list(ids):
     return [sort_ids.index(i) for i in ids]
 
 
-def generate_data(df, mode='train'):
+def generate_data(df):
     data = []
+
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
         rank = re_ranking_list(df_tmp['rank'].to_list())
-        if mode == 'train':
-            source, rank = shuffe_data(source, rank)
-        if len(source) > 1:
-            if len(source) == 2:
-                if rank[0] < rank[1]:
-                    data.append([source[0], source[1], 0, 1])
-                else:
-                    data.append([source[0], source[1], 1, 0])
-            else:
-                for i in range(0, len(source) - 1, 1):
-                    for j in range(i + 1, len(source), 1):
-                        if rank[i] < rank[j]:
-                            data.append([source[i], source[j], 0, 1])
-                        else:
-                            data.append([source[i], source[j], 1, 0])
+        for i in range(len(source)):
+            data.append([source[i], rank[i]])
 
     return data
 
 
 def generate_data_sigmoid(df, mode='train'):
     data = []
-
-    # random_drop = np.random.random(size=10000) > 0.9
-    # count = 0
-
+    data_dict = {}
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
         rank = re_ranking_list(df_tmp['rank'].to_list())
-        if mode == 'train':
-            source, rank = shuffe_data(source, rank)
         if len(source) > 1:
-            if len(source) == 2:
-                if rank[0] > rank[1]:
-                    data.append([source[0], source[1], 1])
-                    data.append([source[1], source[0], 0])
-                else:
-                    data.append([source[1], source[0], 1])
-                    data.append([source[0], source[1], 0])
-            else:
-                for i in range(0, len(source), 1):
-                    for j in range(0, len(source), 1):
-                        if rank[i] > rank[j]:
-                            data.append([source[i], source[j], 1])
-                        else:
-                            data.append([source[i], source[j], 0])
+            for i in range(len(source)):
+                data.append([id, source[i], rank[i]])
+            data_dict[id] = {
+                'len': len(source),
+                'source': source,
+                'rank': rank
+            }
 
-    return data
+    return data, data_dict
 
 
 def generate_data_test(df):
@@ -96,8 +73,7 @@ def generate_data_test(df):
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
         for i in range(len(source)):
-            for j in range(len(source)):
-                data.append([source[i], source[j]])
+            data.append(source[i])
 
     return data
 
@@ -163,9 +139,9 @@ def kendall_tau(ground_truth, predictions):
 
 def map_result(ids, results):
     result_obj = {}
-    for id, result in zip(ids, results):
-        id = [''.join([alphabet[i] for i in s]) for s in id]
-        result_obj[f'{id[0]}{id[1]}'] = result
+    for s, result in zip(ids, results):
+        id = ''.join([alphabet[i] for i in s])
+        result_obj[id] = result
     return result_obj
 
 
@@ -173,12 +149,7 @@ def sort_source(source, true_object):
 
     sorted_source = source.copy()
 
-    for i in range(0, len(sorted_source)):
-        for j in range(i+1, len(sorted_source)):
-            if true_object[f'{sorted_source[i]}{sorted_source[j]}'] > 0.5:
-                temp = sorted_source[i]
-                sorted_source[i] = sorted_source[j]
-                sorted_source[j] = temp
+    sorted_source.sort(key=lambda i: true_object[i])
 
     return [sorted_source.index(s) for s in source]
 
@@ -224,12 +195,13 @@ def adjust_lr(optimizer, epoch):
     if epoch < 1:
         lr = 5e-5
     elif epoch < 2:
-        lr = 5e-5
+        lr = 1e-3
     elif epoch < 5:
-        lr = 5e-5
+        lr = 1e-4
     else:
-        lr = 5e-5
+        lr = 1e-5
 
     for p in optimizer.param_groups:
         p['lr'] = lr
+        
     return lr
