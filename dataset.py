@@ -15,7 +15,7 @@ class PairWiseDataset(Dataset):
         self.data_dic = data_dic
         self.dict_cellid_source = dict_cellid_source
         self.tokenizer = RobertaTokenizer.from_pretrained(
-            'distilbert-base-uncased', do_lower_case=True)
+            BERT_PATH, do_lower_case=True)
         self.mode = mode
 
     def __getitem__(self, index):

@@ -16,6 +16,10 @@ class ScoreModel(nn.Module):
     def __init__(self, pair_mode=False):
         super(ScoreModel, self).__init__()
         self.bert = RobertaModel.from_pretrained(BERT_PATH)
+
+        for param in self.bert.parameters():
+            param.requires_grad = False
+
         self.drop = nn.Dropout(0.2)
         self.top = nn.Linear(768, 1)
         if pair_mode:

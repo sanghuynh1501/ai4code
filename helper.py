@@ -6,7 +6,7 @@ import nltk
 import numpy as np
 import pandas as pd
 from nltk.stem import WordNetLemmatizer
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from wordcloud import STOPWORDS
 
 nltk.download('wordnet')

@@ -2,11 +2,10 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import torch.optim as optim
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from config import BS, MARK_PATH, MAX_LEN, NUM_TRAIN, NW, data_dir
+from config import BS, CODE_PATH, MAX_LEN, NUM_TRAIN, NW, DATA_DIR
 from dataset import PointWiseDataset
 from helper import adjust_lr, generate_data, get_ranks, kendall_tau, read_notebook
 
@@ -48,7 +47,7 @@ def predict(ids, mask):
     return predictions
 
 
-paths_train = list((data_dir / 'train').glob('*.json'))[:NUM_TRAIN]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -61,10 +60,10 @@ df = (
 )
 
 df_orders = pd.read_csv(
-    data_dir / 'train_orders.csv',
+    DATA_DIR / 'train_orders.csv',
     index_col='id',
     squeeze=True,
-).str.split()  # Split the string representation of cell_ids into a list
+).str.split()
 
 df_orders_ = df_orders.to_frame().join(
     df.reset_index('cell_id').groupby('id')['cell_id'].apply(list),
@@ -83,11 +82,11 @@ df_ranks = (
     .set_index('cell_id', append=True)
 )
 
-df_ancestors = pd.read_csv(data_dir / 'train_ancestors.csv', index_col='id')
+df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
     df_ranks, on=["id", "cell_id"]).merge(df_ancestors, on=["id"])
-df = df[df["cell_type"] == "markdown"].reset_index(drop=True)
+df = df[df["cell_type"] == "code"].reset_index(drop=True)
 
 NVALID = 0.1
 
@@ -169,11 +168,11 @@ for epoch in range(EPOCHS):
     y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
     test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
-    torch.save(net.state_dict(), MARK_PATH)
+    torch.save(net.state_dict(), CODE_PATH)
 
     print(
         f'Epoch {epoch + 1}, \n'
-        f'Loss: {train_loss / total_train}, '
+        # f'Loss: {train_loss / total_train}, '
         f'Test Loss: {test_loss / total_test}, '
         f'Test Tau: {test_tau} '
     )
