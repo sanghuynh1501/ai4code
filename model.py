@@ -1,31 +1,39 @@
 import torch
 from torch import nn
-from transformers import AutoModel
+from config import BERT_PATH
+from transformers import RobertaModel
+
+
+def linear(x):
+    return x
+
+
+def sigmoid(x):
+    return torch.sigmoid(x)
 
 
 class ScoreModel(nn.Module):
-    def __init__(self):
+    def __init__(self, pair_mode=False):
         super(ScoreModel, self).__init__()
-        self.distill_bert = AutoModel.from_pretrained(
-            'distilbert-base-uncased')
-
-        for param in self.distill_bert.parameters():
-            param.requires_grad = False
-
-        self.out = nn.Linear(768, 1)
-        self.dropout = nn.Dropout(0.2)
+        self.bert = RobertaModel.from_pretrained(BERT_PATH)
+        self.drop = nn.Dropout(0.2)
+        self.top = nn.Linear(768, 1)
+        if pair_mode:
+            self.activation = linear
+        else:
+            self.activation = sigmoid
 
     def forward(self, ids, mask):
-        x = self.distill_bert(ids, mask)[0]
-        x = self.dropout(x)
-        x = self.out(x[:, 0, :])
-        return x
+        x = self.bert(ids, mask)[0]
+        x = self.drop(x)
+        x = self.top(x[:, 0, :])
+        return self.activation(x)
 
 
-class MarkdownModel(nn.Module):
+class PairWiseModel(nn.Module):
     def __init__(self):
-        super(MarkdownModel, self).__init__()
-        self.score_model = ScoreModel()
+        super(PairWiseModel, self).__init__()
+        self.score_model = ScoreModel(True)
 
     def forward(self, ids, mask):
         left_ids = ids[:, 0, :]

@@ -1,4 +1,3 @@
-import random
 import re
 import string
 from bisect import bisect
@@ -7,10 +6,8 @@ import nltk
 import numpy as np
 import pandas as pd
 from nltk.stem import WordNetLemmatizer
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from wordcloud import STOPWORDS
-
-from config import alphabet
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')
@@ -37,43 +34,20 @@ def re_ranking_list(ids):
     return [sort_ids.index(i) for i in ids]
 
 
+def re_ranking_list_pct(ids):
+    sort_ids = ids.copy()
+    sort_ids.sort()
+    return [(sort_ids.index(i) / len(ids)) for i in ids]
+
+
 def generate_data(df):
     data = []
 
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
-        rank = re_ranking_list(df_tmp['pct_rank'].to_list())
+        rank = re_ranking_list_pct(df_tmp['rank'].to_list())
         for i in range(len(source)):
             data.append([source[i], rank[i]])
-
-    return data
-
-
-def generate_data_sigmoid(df, mode='train'):
-    data = []
-    data_dict = {}
-    for id, df_tmp in tqdm(df.groupby('id')):
-        source = df_tmp['cell_id'].to_list()
-        rank = re_ranking_list(df_tmp['rank'].to_list())
-        if len(source) > 1:
-            for i in range(len(source)):
-                data.append([id, source[i], rank[i]])
-            data_dict[id] = {
-                'len': len(source),
-                'source': source,
-                'rank': rank
-            }
-
-    return data, data_dict
-
-
-def generate_data_test(df):
-    data = []
-
-    for id, df_tmp in tqdm(df.groupby('id')):
-        source = df_tmp['cell_id'].to_list()
-        for i in range(len(source)):
-            data.append(source[i])
 
     return data
 
@@ -137,46 +111,6 @@ def kendall_tau(ground_truth, predictions):
     return 1 - 4 * total_inversions / total_2max
 
 
-def map_result(ids, results):
-    result_obj = {}
-    for s, result in zip(ids, results):
-        id = ''.join([alphabet[i] for i in s])
-        result_obj[id] = result
-    return result_obj
-
-
-def sort_source(source, true_object):
-
-    sorted_source = source.copy()
-
-    sorted_source.sort(key=lambda i: true_object[i])
-
-    return [sorted_source.index(s) for s in source]
-
-
-def check_rank(df, true_object):
-    ranks = []
-    pred_ranks = []
-    total = 0
-    for _, df_tmp in tqdm(df.groupby('id')):
-
-        source = df_tmp['cell_id'].to_list()
-        rank = re_ranking_list(df_tmp['rank'].to_list())
-        source, rank = shuffe_data(source, rank)
-
-        pred_rank = sort_source(source, true_object)
-
-        ranks.append(rank)
-        pred_ranks.append(pred_rank)
-
-        if total < 32:
-            print(rank)
-            print(pred_rank)
-        total += 1
-
-    return kendall_tau(ranks, pred_ranks)
-
-
 def read_notebook(path):
     return (
         pd.read_json(
@@ -203,5 +137,19 @@ def adjust_lr(optimizer, epoch):
 
     for p in optimizer.param_groups:
         p['lr'] = lr
-        
+
     return lr
+
+
+def read_notebook(path):
+    return (
+        pd.read_json(
+            path,
+            dtype={'cell_type': 'category', 'source': 'str'})
+        .assign(id=path.stem)
+        .rename_axis('cell_id')
+    )
+
+
+def get_ranks(base, derived):
+    return [base.index(d) for d in derived]
