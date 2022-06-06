@@ -7,7 +7,7 @@ CODE_PATH = './weights/model_code.pth'
 DATA_DIR = Path('data')
 
 NUM_TRAIN = 10000
-NVALID = 0.1
 MAX_LEN = 128
+NVALID = 0.1
 BS = 128
 NW = 2

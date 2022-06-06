@@ -3,7 +3,6 @@ import string
 from bisect import bisect
 
 import nltk
-import numpy as np
 import pandas as pd
 from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
@@ -13,19 +12,6 @@ nltk.download('wordnet')
 nltk.download('omw-1.4')
 stemmer = WordNetLemmatizer()
 stopwords = set(STOPWORDS)
-
-
-def shuffe_data(a, b):
-    a = np.array(a)
-    b = np.array(b)
-
-    indices = np.arange(a.shape[0])
-    np.random.shuffle(indices)
-
-    a = a[indices]
-    b = b[indices]
-
-    return a.tolist(), b.tolist()
 
 
 def re_ranking_list(ids):
@@ -139,16 +125,6 @@ def adjust_lr(optimizer, epoch):
         p['lr'] = lr
 
     return lr
-
-
-def read_notebook(path):
-    return (
-        pd.read_json(
-            path,
-            dtype={'cell_type': 'category', 'source': 'str'})
-        .assign(id=path.stem)
-        .rename_axis('cell_id')
-    )
 
 
 def get_ranks(base, derived):
