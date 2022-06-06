@@ -11,20 +11,19 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from config import BS, MAX_LEN, NVALID, NW
-from dataset import DatasetTest, MarkdownDataset
-from helper import (adjust_lr, check_rank, generate_data_sigmoid,
+from dataset import DatasetPCT, DatasetTest, MarkdownDataset
+from helper import (adjust_lr, check_rank, generate_data, generate_data_sigmoid,
                     generate_data_test, map_result, preprocess_text)
-from model import MarkdownModel
+from model import ScoreModel
 
-device = 'cuda'
+device = 'cpu'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
 
-net = MarkdownModel().to(device)
-net.load_state_dict(torch.load('code_model.pth'))
-criterion = torch.nn.BCELoss()
+net = ScoreModel().to(device)
+criterion = torch.nn.MSELoss()
 optimizer = optim.Adam(net.parameters(), lr=3e-4,
                        betas=(0.9, 0.999), eps=1e-08)
 
@@ -60,49 +59,51 @@ def convert_result(a):
     return a
 
 
-# extra_df = pd.read_csv('csv/extra_dataset.csv')
-# extra_df = extra_df[extra_df['cell_type'] == 'code']
-# extra_df.source = extra_df.source.apply(preprocess_text)
-# extra_df = extra_df[extra_df['source'].notnull()]
-# random_strings = [''.join(random.choice(string.ascii_lowercase)
-#                           for i in range(8)) for _ in range(len(extra_df))]
-# extra_df['cell_id'] = random_strings
+extra_df = pd.read_csv('csv/extra_dataset.csv')
+extra_df = extra_df[extra_df['cell_type'] == 'code']
+extra_df.source = extra_df.source.apply(preprocess_text)
+extra_df = extra_df[extra_df['source'].notnull()]
+random_strings = [''.join(random.choice(string.ascii_lowercase)
+                          for i in range(8)) for _ in range(len(extra_df))]
+extra_df['cell_id'] = random_strings
 
 df = pd.read_csv('csv/code_dataset.csv')
-df = df[df['source'].notnull()].reset_index(drop=True)
-# df = pd.concat([df, extra_df]).reset_index(drop=True)
+df = df[df['source'].notnull()]
+df = pd.concat([df, extra_df]).reset_index(drop=True)
 
 df_size = df.groupby(['id']).size().to_frame()
 df_size.columns = ['size']
 df_size.reset_index(inplace=True)
-df_size = df_size[:10000]
 
+df_len = df.groupby('id')['source'].agg(
+    lambda x: x.str.split().apply(len).max()).to_frame()
+df_len.columns = ['len']
+df_len.reset_index(inplace=True)
+
+df_size = df_size.merge(df_len, on='id', how='left')
+df_size = df_size[(df_size['size'] <= 100) & (df_size['len'] <= 128)]
+
+concat_df_size = []
+for i in range(100):
+    sub_df = df_size[df_size['size'] == i + 1].reset_index(drop=True)[:100]
+    concat_df_size.append(sub_df)
+
+df_size = pd.concat(concat_df_size).reset_index(drop=True)
 df = df_size.merge(df, on='id', how='left')
 
-# df_len = df.groupby('id')['source'].agg(
-#     lambda x: x.str.split().apply(len).max()).to_frame()
-# df_len.columns = ['len']
-# df_len.reset_index(inplace=True)
+df['pct_rank'] = df['rank'] / df.groupby('id')['cell_id'].transform('count')
 
-# df_size = df_size.merge(df_len, on='id', how='left')
-# df_size = df_size[(df_size['size'] <= 100) & (df_size['len'] <= 128)]
-
-# concat_df_size = []
-# for i in range(100):
-#     sub_df = df_size[df_size['size'] == i + 1].reset_index(drop=True)[:100]
-#     concat_df_size.append(sub_df)
-
-# df_size = pd.concat(concat_df_size).reset_index(drop=True)
-# df = df_size.merge(df, on='id', how='left')
+NVALID = 0.1  # size of validation set
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
+
 train_ind, val_ind = next(splitter.split(df, groups=df['id']))
 
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data, data_dic = generate_data_sigmoid(train_df, 'train')
-val_data, val_data_dic = generate_data_sigmoid(val_df, 'test')
+data = generate_data(train_df)
+val_data = generate_data(val_df)
 test_data = generate_data_test(val_df)
 
 dict_cellid_source_train = dict(
@@ -110,10 +111,10 @@ dict_cellid_source_train = dict(
 dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
-train_ds = MarkdownDataset(
-    data, data_dic, dict_cellid_source_train, MAX_LEN)
-val_ds = MarkdownDataset(
-    val_data, val_data_dic, dict_cellid_source_val, MAX_LEN)
+train_ds = DatasetPCT(
+    data, dict_cellid_source_train, MAX_LEN)
+val_ds = DatasetPCT(
+    val_data, dict_cellid_source_val, MAX_LEN)
 test_ds = DatasetTest(
     test_data, dict_cellid_source_val, MAX_LEN)
 
@@ -189,8 +190,6 @@ for epoch in range(EPOCHS):
     result_obj = map_result(id_info_list, test_preds)
     test_tau = check_rank(val_df, result_obj)
     test_accuracy = (total_true / len(test_trues))
-
-    torch.save(net.state_dict(), 'code_model.pth')
 
     print(
         f'Epoch {epoch + 1}, \n'

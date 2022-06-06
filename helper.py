@@ -42,7 +42,7 @@ def generate_data(df):
 
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
-        rank = re_ranking_list(df_tmp['rank'].to_list())
+        rank = re_ranking_list(df_tmp['pct_rank'].to_list())
         for i in range(len(source)):
             data.append([source[i], rank[i]])
 

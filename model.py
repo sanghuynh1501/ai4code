@@ -17,7 +17,7 @@ class ScoreModel(nn.Module):
 
     def forward(self, ids, mask):
         x = self.distill_bert(ids, mask)[0]
-        # x = self.dropout(x)
+        x = self.dropout(x)
         x = self.out(x[:, 0, :])
         return x
 

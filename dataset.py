@@ -67,6 +67,40 @@ class MarkdownDataset(Dataset):
         return len(self.df)
 
 
+class DatasetPCT(Dataset):
+
+    def __init__(self, df, dict_cellid_source, max_len):
+        super().__init__()
+        self.df = df
+        self.max_len = max_len
+        self.dict_cellid_source = dict_cellid_source
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            'distilbert-base-uncased', do_lower_case=True)
+
+    def __getitem__(self, index):
+        row = self.df[index]
+        text_id, label = row
+
+        txt = self.dict_cellid_source[text_id]
+
+        inputs = self.tokenizer.encode_plus(
+            txt,
+            None,
+            add_special_tokens=True,
+            max_length=self.max_len,
+            padding="max_length",
+            return_token_type_ids=True,
+            truncation=True
+        )
+        id = torch.LongTensor(inputs['input_ids'])
+        mask = torch.LongTensor(inputs['attention_mask'])
+
+        return id, mask, torch.FloatTensor([label])
+
+    def __len__(self):
+        return len(self.df)
+
+
 class DatasetTest(Dataset):
 
     def __init__(self, df, dict_cellid_source, max_len):
