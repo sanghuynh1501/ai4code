@@ -85,14 +85,14 @@ df_ranks = (
 df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
-    df_ranks, on=["id", "cell_id"]).merge(df_ancestors, on=["id"])
-df = df[df["cell_type"] == "code"].reset_index(drop=True)
+    df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
+df = df[df['cell_type'] == 'code'].reset_index(drop=True)
 
 NVALID = 0.1
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
 
-train_ind, val_ind = next(splitter.split(df, groups=df["ancestor_id"]))
+train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
@@ -116,7 +116,7 @@ train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-EPOCHS = 1
+EPOCHS = 5
 max_test_tau = 0
 
 for epoch in range(EPOCHS):
@@ -165,10 +165,12 @@ for epoch in range(EPOCHS):
                 pbar.update(len(ids))
 
     val_df['pred'] = test_preds
-    y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+    y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
     test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
-    torch.save(net.state_dict(), CODE_PATH)
+    if test_tau > max_test_tau:
+        torch.save(net.state_dict(), CODE_PATH)
+        max_test_tau = test_tau
 
     print(
         f'Epoch {epoch + 1}, \n'

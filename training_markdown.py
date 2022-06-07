@@ -2,31 +2,31 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import torch.optim as optim
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from config import BS, MARK_PATH, MAX_LEN, NUM_TRAIN, NW, DATA_DIR
+from dataset import PointWiseDataset
+from helper import adjust_lr, generate_data, get_ranks, kendall_tau, read_notebook
 
-from config import BS, MAX_LEN, NVALID, NW
-from dataset import MarkdownDataset
-from helper import adjust_lr, check_rank, generate_data_sigmoid, map_result
-from model import MarkdownModel
+from model import ScoreModel
 
-device = 'cpu'
+device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-
-net = MarkdownModel().to(device)
-criterion = torch.nn.BCELoss()
-optimizer = optim.Adam(net.parameters())
+net = ScoreModel().to(device)
+criterion = torch.nn.MSELoss()
+optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters(
+)), lr=3e-4, betas=(0.9, 0.999), eps=1e-08)
 
 
 def train_step(ids, mask, labels):
     optimizer.zero_grad()
 
     outputs = net(ids, mask)
+
     loss = criterion(outputs, labels)
     loss.backward()
     optimizer.step()
@@ -47,47 +47,67 @@ def predict(ids, mask):
     return predictions
 
 
-def convert_result(a):
-    a = (a > 0.5).astype(np.int8)
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
+notebooks_train = [
+    read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
+]
 
-    return a
+df = (
+    pd.concat(notebooks_train)
+    .set_index('id', append=True)
+    .swaplevel()
+    .sort_index(level='id', sort_remaining=False)
+)
 
+df_orders = pd.read_csv(
+    DATA_DIR / 'train_orders.csv',
+    index_col='id',
+    squeeze=True,
+).str.split()
 
-df = pd.read_csv('csv/markdown_dataset.csv')
-df = df[df['source'].notnull()]
-df_size = df.groupby(['id']).size().to_frame()
-print(len(df_size))
-df_size.columns = ['size']
-df_size = df_size[df_size['size'] <= 40]
-df_size.reset_index(inplace=True)
-# print(len(df_size))
-# df_size = df_size[:1000]
+df_orders_ = df_orders.to_frame().join(
+    df.reset_index('cell_id').groupby('id')['cell_id'].apply(list),
+    how='right',
+)
 
-concat_df_size = []
-for i in range(78):
-    sub_df = df_size[df_size['size'] == i + 1].reset_index(drop=True)[:382]
-    concat_df_size.append(sub_df)
+ranks = {}
+for id_, cell_order, cell_id in df_orders_.itertuples():
+    ranks[id_] = {'cell_id': cell_id, 'rank': get_ranks(cell_order, cell_id)}
 
-df_size = pd.concat(concat_df_size).reset_index(drop=True)
-df = df_size.merge(df, on='id', how='left')
+df_ranks = (
+    pd.DataFrame
+    .from_dict(ranks, orient='index')
+    .rename_axis('id')
+    .apply(pd.Series.explode)
+    .set_index('cell_id', append=True)
+)
+
+df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
+
+df = df.reset_index().merge(
+    df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
+df = df[df['cell_type'] == 'markdown'].reset_index(drop=True)
+
+NVALID = 0.1
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
-train_ind, val_ind = next(splitter.split(df, groups=df['id']))
+
+train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data = generate_data_sigmoid(train_df, 'train')
-val_data = generate_data_sigmoid(val_df, 'test')
+data = generate_data(train_df)
+val_data = generate_data(val_df)
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
 dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
-train_ds = MarkdownDataset(
+train_ds = PointWiseDataset(
     data, dict_cellid_source_train, MAX_LEN)
-val_ds = MarkdownDataset(
+val_ds = PointWiseDataset(
     val_data, dict_cellid_source_val, MAX_LEN)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
@@ -96,8 +116,7 @@ train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-
-EPOCHS = 200
+EPOCHS = 5
 max_test_tau = 0
 
 for epoch in range(EPOCHS):
@@ -110,53 +129,52 @@ for epoch in range(EPOCHS):
 
     train_tau = 0
     test_tau = 0
-    test_tau_full = 0
+
     train_accuracy = 0
     test_accuracy = 0
-    total_true = 0
+
+    total_train = 0
+    total_test = 0
 
     net.train()
     lr = adjust_lr(optimizer, epoch)
-
     with tqdm(total=len(train_ds)) as pbar:
-        for ids, mask, labels, _ in train_loader:
+        for ids, mask, labels in train_loader:
             loss = train_step(ids.to(device), mask.to(
                 device), labels.to(device))
-            train_loss += loss * BS
+
+            train_loss += loss * len(ids)
+            total_train += len(ids)
 
             pbar.update(len(ids))
 
     net.eval()
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
-            for ids, mask, labels, id_infoes in val_loader:
+            for ids, mask, labels in val_loader:
                 loss = test_step(ids.to(device), mask.to(
                     device), labels.to(device))
-                test_loss += loss * BS
+
+                test_loss += loss * len(ids)
+                total_test += len(ids)
 
                 predicts = predict(ids.to(device), mask.to(
-                    device)).detach().cpu().numpy()[:, 0]
-                test_trues += labels.cpu().numpy().tolist()
-                id_info_list += id_infoes.cpu().numpy().tolist()
+                    device)).detach().cpu().numpy().ravel()
                 test_preds += predicts.tolist()
-                total_true += np.sum(labels.cpu().numpy()
-                                     [:, 0] == convert_result(predicts)).astype(np.int8)
 
                 pbar.update(len(ids))
 
-    result_obj = map_result(id_info_list, test_preds)
+    val_df['pred'] = test_preds
+    y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
+    test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
-    test_tau = check_rank(val_df, result_obj)
-    test_accuracy = (total_true / len(test_trues))
-
-    torch.save(net.state_dict(), 'weights/code_model.pth')
+    if test_tau > max_test_tau:
+        torch.save(net.state_dict(), MARK_PATH)
+        max_test_tau = test_tau
 
     print(
         f'Epoch {epoch + 1}, \n'
-        f'Loss: {train_loss / len(train_ds)}, '
-        f'Accuracy: {train_accuracy * 100}, '
-        f'Tau: {train_tau}, \n'
-        f'Test Loss: {test_loss / len(val_ds)}, '
-        f'Test Accuracy: {test_accuracy * 100}, '
+        # f'Loss: {train_loss / total_train}, '
+        f'Test Loss: {test_loss / total_test}, '
         f'Test Tau: {test_tau} '
     )
