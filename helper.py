@@ -50,8 +50,11 @@ def generate_data_test(df):
     return data
 
 
-def generate_triplet(df):
+def generate_triplet(df, mode='train'):
     triplets = []
+    ids = df.id.unique()
+    random_drop = np.random.random(size=10000) > 0.9
+    count = 0
 
     for id, df_tmp in tqdm(df.groupby('id')):
         df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
@@ -60,16 +63,21 @@ def generate_triplet(df):
         df_tmp_code_rank = df_tmp_code['rank'].values
         df_tmp_code_cell_id = df_tmp_code['cell_id'].values
 
-        if len(df_tmp_code) > 0 and len(df_tmp_markdown) > 0:
-            for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
-                labels = np.array([(r == (rank+1))
-                                   for r in df_tmp_code_rank]).astype('int')
+        for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+            labels = np.array([(r == (rank+1))
+                              for r in df_tmp_code_rank]).astype('int')
 
-                for cid, label in zip(df_tmp_code_cell_id, labels):
-                    if label == 1:
-                        triplets.append([cell_id, cid, label])
-                    else:
-                        triplets.append([cell_id, cid, label])
+            for cid, label in zip(df_tmp_code_cell_id, labels):
+                count += 1
+                if label == 1:
+                    triplets.append([cell_id, cid, label])
+                    # triplets.append( [cid, cell_id, label] )
+                elif mode == 'test':
+                    triplets.append([cell_id, cid, label])
+                    # triplets.append( [cid, cell_id, label] )
+                elif random_drop[count % 10000]:
+                    triplets.append([cell_id, cid, label])
+                    # triplets.append( [cid, cell_id, label] )
 
     return triplets
 

@@ -54,7 +54,7 @@ def convert_result(a):
     return a
 
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:10000]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -102,17 +102,17 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
-
-data, dict_code_train = generate_triplet_random(train_df)
-val_data = generate_triplet(val_df[::10])
+val_df = val_df[::10]
+data = generate_triplet(train_df, 'train')
+val_data = generate_triplet(val_df, 'test')
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
 dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
-train_ds = PairWiseRandomDataset(
-    data, dict_code_train, dict_cellid_source_train, MAX_LEN)
+train_ds = PairWiseDataset(
+    data, dict_cellid_source_train, MAX_LEN)
 val_ds = PairWiseDataset(
     val_data, dict_cellid_source_val, MAX_LEN)
 
@@ -160,10 +160,10 @@ for epoch in range(EPOCHS):
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
             for ids, mask, labels in val_loader:
-                # loss = test_step(ids.to(device), mask.to(
-                #     device), labels.to(device))
+                loss = test_step(ids.to(device), mask.to(
+                    device), labels.to(device))
 
-                # test_loss += loss * len(ids)
+                test_loss += loss * len(ids)
                 total_test += len(ids)
 
                 predicts = predict(ids.to(device), mask.to(
