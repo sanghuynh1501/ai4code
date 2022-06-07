@@ -3,11 +3,10 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-from config import (BS, CODE_MARK_PATH, CODE_PATH, DATA_DIR, MARK_PATH,
-                    MAX_LEN, NW)
+from config import BS, CODE_MARK_PATH, CODE_PATH, MARK_PATH, MAX_LEN, NW, DATA_DIR
 from dataset import TestDataset
 from helper import generate_data_test, get_ranks, kendall_tau, read_notebook
+
 from model import PairWiseModel, ScoreModel
 
 device = 'cuda'
@@ -22,14 +21,14 @@ def cal_distance(a, b):
 
 
 def get_code(mar, codes, pairs_hash):
-    max_code = ''
-    max_score = 0
+    max_code = None
     for code in codes:
         score = cal_distance(pairs_hash[mar], pairs_hash[code])
-        if score > max_score:
-            max_score = score
+        if score > 0.5:
             max_code = code
-    return max_code
+            codes.remove(max_code)
+            return max_code, codes
+    return None, codes
 
 
 model_code = ScoreModel().to(device)
@@ -44,7 +43,7 @@ model_pairse = PairWiseModel().to(device)
 model_pairse.load_state_dict(torch.load(CODE_MARK_PATH))
 model_pairse.eval()
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[10000:11000]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:10]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -141,6 +140,9 @@ pairs_hash = {}
 for i in range(len(data_pair)):
     pairs_hash[data_pair[i]] = pair_orders[i]
 
+ids = df['id'].unique()
+print(ids)
+
 # =======================================================================
 df_code['pred'] = code_orders
 y_dummy = df_code.sort_values('pred').groupby('id')['cell_id'].apply(list)
@@ -165,11 +167,19 @@ results = []
 for mark, code in zip(marks, codes):
     result = []
     for ma in mark:
-        cd = get_code(ma, code, pairs_hash)
+        cd, code = get_code(ma, code, pairs_hash)
         result.append(ma)
-        result.append(cd)
-
+        if cd is not None:
+            result.append(cd)
     results.append(result)
 
-test_tau = kendall_tau(df_orders.loc[y_dummy.index], results)
+orders = df_orders.loc[ids].tolist()
+results = results
+
+# for order, result in zip(orders, results):
+#     print('=========================================')
+#     print(order)
+#     print(result)
+
+test_tau = kendall_tau(df_orders.loc[ids].tolist(), results)
 print('test tau ', test_tau)

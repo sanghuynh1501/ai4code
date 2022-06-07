@@ -60,15 +60,16 @@ def generate_triplet(df):
         df_tmp_code_rank = df_tmp_code['rank'].values
         df_tmp_code_cell_id = df_tmp_code['cell_id'].values
 
-        for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
-            labels = np.array([(r == (rank+1))
-                              for r in df_tmp_code_rank]).astype('int')
+        if len(df_tmp_code) > 0 and len(df_tmp_markdown) > 0:
+            for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+                labels = np.array([(r == (rank+1))
+                                   for r in df_tmp_code_rank]).astype('int')
 
-            for cid, label in zip(df_tmp_code_cell_id, labels):
-                if label == 1:
-                    triplets.append([cell_id, cid, label])
-                else:
-                    triplets.append([cell_id, cid, label])
+                for cid, label in zip(df_tmp_code_cell_id, labels):
+                    if label == 1:
+                        triplets.append([cell_id, cid, label])
+                    else:
+                        triplets.append([cell_id, cid, label])
 
     return triplets
 
@@ -84,14 +85,15 @@ def generate_triplet_random(df):
         df_tmp_code_cell_id = df_tmp_code['cell_id'].values
         df_tmp_code_rank = df_tmp_code['rank'].values
 
-        for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
-            triplets.append([id, cell_id, rank])
+        if len(df_tmp_code) > 0 and len(df_tmp_markdown) > 0:
+            for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+                triplets.append([id, cell_id, rank])
 
-        dict_code[id] = {
-            'len': len(df_tmp_code_cell_id),
-            'codes': df_tmp_code_cell_id,
-            'ranks': df_tmp_code_rank
-        }
+            dict_code[id] = {
+                'len': len(df_tmp_code_cell_id),
+                'codes': df_tmp_code_cell_id,
+                'ranks': df_tmp_code_rank
+            }
 
     return triplets, dict_code
 

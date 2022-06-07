@@ -17,6 +17,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 net = PairWiseModel().to(device)
+net.load_state_dict(torch.load(CODE_MARK_PATH))
 criterion = torch.nn.MSELoss()
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters(
 )), lr=3e-4, betas=(0.9, 0.999), eps=1e-08)
@@ -102,8 +103,8 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data, dict_code = generate_triplet_random(train_df)
-val_data = generate_triplet(val_df)
+data, dict_code_train = generate_triplet_random(train_df)
+val_data = generate_triplet(val_df[::10])
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
@@ -111,7 +112,7 @@ dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
 train_ds = PairWiseRandomDataset(
-    data, dict_code, dict_cellid_source_train, MAX_LEN)
+    data, dict_code_train, dict_cellid_source_train, MAX_LEN)
 val_ds = PairWiseDataset(
     val_data, dict_cellid_source_val, MAX_LEN)
 
@@ -138,8 +139,8 @@ for epoch in range(EPOCHS):
     train_accuracy = 0
     test_accuracy = 0
 
-    total_train = 0
-    total_test = 0
+    total_train = 1
+    total_test = 1
 
     total_true = 0
 
@@ -159,10 +160,10 @@ for epoch in range(EPOCHS):
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
             for ids, mask, labels in val_loader:
-                loss = test_step(ids.to(device), mask.to(
-                    device), labels.to(device))
+                # loss = test_step(ids.to(device), mask.to(
+                #     device), labels.to(device))
 
-                test_loss += loss * len(ids)
+                # test_loss += loss * len(ids)
                 total_test += len(ids)
 
                 predicts = predict(ids.to(device), mask.to(
