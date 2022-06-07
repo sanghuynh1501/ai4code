@@ -1,14 +1,14 @@
-from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from config import BS, CODE_PATH, MAX_LEN, NUM_TRAIN, NW, DATA_DIR
-from dataset import PointWiseDataset
-from helper import adjust_lr, generate_data, get_ranks, kendall_tau, read_notebook
 
+from config import BS, CODE_PATH, DATA_DIR, MAX_LEN, NUM_TRAIN, NW
+from dataset import PointWiseDataset
+from helper import (adjust_lr, generate_data, get_ranks, kendall_tau,
+                    read_notebook)
 from model import ScoreModel
 
 device = 'cuda'
@@ -174,7 +174,7 @@ for epoch in range(EPOCHS):
 
     print(
         f'Epoch {epoch + 1}, \n'
-        # f'Loss: {train_loss / total_train}, '
+        f'Loss: {train_loss / total_train}, '
         f'Test Loss: {test_loss / total_test}, '
         f'Test Tau: {test_tau} '
     )

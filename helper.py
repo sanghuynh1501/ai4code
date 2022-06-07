@@ -3,6 +3,7 @@ import string
 from bisect import bisect
 
 import nltk
+import numpy as np
 import pandas as pd
 from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
@@ -36,6 +37,63 @@ def generate_data(df):
             data.append([source[i], rank[i]])
 
     return data
+
+
+def generate_data_test(df):
+    data = []
+
+    for id, df_tmp in tqdm(df.groupby('id')):
+        source = df_tmp['cell_id'].to_list()
+        for i in range(len(source)):
+            data.append(source[i])
+
+    return data
+
+
+def generate_triplet(df):
+    triplets = []
+
+    for id, df_tmp in tqdm(df.groupby('id')):
+        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
+
+        df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
+        df_tmp_code_rank = df_tmp_code['rank'].values
+        df_tmp_code_cell_id = df_tmp_code['cell_id'].values
+
+        for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+            labels = np.array([(r == (rank+1))
+                              for r in df_tmp_code_rank]).astype('int')
+
+            for cid, label in zip(df_tmp_code_cell_id, labels):
+                if label == 1:
+                    triplets.append([cell_id, cid, label])
+                else:
+                    triplets.append([cell_id, cid, label])
+
+    return triplets
+
+
+def generate_triplet_random(df):
+    triplets = []
+    dict_code = {}
+
+    for id, df_tmp in tqdm(df.groupby('id')):
+        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
+
+        df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
+        df_tmp_code_cell_id = df_tmp_code['cell_id'].values
+        df_tmp_code_rank = df_tmp_code['rank'].values
+
+        for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+            triplets.append([id, cell_id, rank])
+
+        dict_code[id] = {
+            'len': len(df_tmp_code_cell_id),
+            'codes': df_tmp_code_cell_id,
+            'ranks': df_tmp_code_rank
+        }
+
+    return triplets, dict_code
 
 
 def preprocess_text(document):

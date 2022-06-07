@@ -5,18 +5,18 @@ from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from config import BS, DATA_DIR, MARK_PATH, MAX_LEN, NUM_TRAIN, NW
-from dataset import PointWiseDataset
-from helper import (adjust_lr, generate_data, get_ranks, kendall_tau,
-                    read_notebook)
-from model import ScoreModel
+from config import BS, CODE_MARK_PATH, DATA_DIR, MAX_LEN, NUM_TRAIN, NW
+from dataset import PairWiseDataset, PairWiseRandomDataset
+from helper import (adjust_lr, generate_triplet, generate_triplet_random,
+                    get_ranks, read_notebook)
+from model import PairWiseModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-net = ScoreModel().to(device)
+net = PairWiseModel().to(device)
 criterion = torch.nn.MSELoss()
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters(
 )), lr=3e-4, betas=(0.9, 0.999), eps=1e-08)
@@ -45,6 +45,12 @@ def predict(ids, mask):
     predictions = net(ids, mask)
 
     return predictions
+
+
+def convert_result(a):
+    a = (a > 0.5).astype(np.int8)
+
+    return a
 
 
 paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
@@ -86,7 +92,6 @@ df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-df = df[df['cell_type'] == 'markdown'].reset_index(drop=True)
 
 NVALID = 0.1
 
@@ -97,17 +102,17 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data = generate_data(train_df)
-val_data = generate_data(val_df)
+data, dict_code = generate_triplet_random(train_df)
+val_data = generate_triplet(val_df)
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
 dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
-train_ds = PointWiseDataset(
-    data, dict_cellid_source_train, MAX_LEN)
-val_ds = PointWiseDataset(
+train_ds = PairWiseRandomDataset(
+    data, dict_code, dict_cellid_source_train, MAX_LEN)
+val_ds = PairWiseDataset(
     val_data, dict_cellid_source_val, MAX_LEN)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
@@ -136,6 +141,8 @@ for epoch in range(EPOCHS):
     total_train = 0
     total_test = 0
 
+    total_true = 0
+
     net.train()
     lr = adjust_lr(optimizer, epoch)
     with tqdm(total=len(train_ds)) as pbar:
@@ -162,19 +169,18 @@ for epoch in range(EPOCHS):
                     device)).detach().cpu().numpy().ravel()
                 test_preds += predicts.tolist()
 
+                total_true += np.sum(labels.cpu().numpy().ravel()
+                                     == convert_result(predicts)).astype(np.int32)
+
                 pbar.update(len(ids))
 
-    val_df['pred'] = test_preds
-    y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
-    test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
-
-    if test_tau > max_test_tau:
-        torch.save(net.state_dict(), MARK_PATH)
-        max_test_tau = test_tau
+    test_accuracy = (total_true / total_test)
+    torch.save(net.state_dict(), CODE_MARK_PATH)
 
     print(
         f'Epoch {epoch + 1}, \n'
         f'Loss: {train_loss / total_train}, '
         f'Test Loss: {test_loss / total_test}, '
+        f'Test Accuracy: {test_accuracy * 100}, '
         f'Test Tau: {test_tau} '
     )

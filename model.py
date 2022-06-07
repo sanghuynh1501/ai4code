@@ -1,7 +1,8 @@
 import torch
 from torch import nn
-from config import BERT_PATH
 from transformers import RobertaModel
+
+from config import BERT_PATH
 
 
 def linear(x):
