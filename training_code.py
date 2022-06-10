@@ -5,27 +5,28 @@ from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from config import BS, CODE_PATH, DATA_DIR, MAX_LEN, NUM_TRAIN, NW
-from dataset import PointWiseDataset
-from helper import (adjust_lr, generate_data, get_ranks, kendall_tau,
-                    read_notebook)
-from model import ScoreModel
+from config import BS, DATA_DIR, MAX_LEN, NW, CODE_MARK_PATH
+from dataset import PairWiseRandomDataset, TestDataset
+from helper import (adjust_lr, generate_data_test, generate_triplet_random,
+                    get_ranks, kendall_tau, preprocess_code, preprocess_text, read_notebook)
+from model import PairWiseModel
 
-device = 'cuda'
+device = 'cpu'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-net = ScoreModel().to(device)
-criterion = torch.nn.MSELoss()
+net = PairWiseModel().to(device)
+# net.load_state_dict(torch.load(CODE_PATH))
+criterion = torch.nn.BCELoss()
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters(
 )), lr=3e-4, betas=(0.9, 0.999), eps=1e-08)
 
 
-def train_step(ids, mask, labels):
+def train_step(mark, mark_mask, code, code_mask, labels):
     optimizer.zero_grad()
 
-    outputs = net(ids, mask)
+    outputs = net(mark, mark_mask, code, code_mask)
 
     loss = criterion(outputs, labels)
     loss.backward()
@@ -34,20 +35,20 @@ def train_step(ids, mask, labels):
     return loss.item()
 
 
-def test_step(ids, mask, labels):
-    outputs = net(ids, mask)
+def test_step(mark, mark_mask, code, code_mask, labels):
+    outputs = net(mark, mark_mask, code, code_mask)
     loss = criterion(outputs, labels)
 
     return loss.item()
 
 
-def predict(ids, mask):
-    predictions = net(ids, mask)
+def predict(mark, mark_mask, code, code_mask):
+    predictions = net(mark, mark_mask, code, code_mask)
 
     return predictions
 
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:200]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -86,7 +87,14 @@ df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-df = df[df['cell_type'] == 'code'].reset_index(drop=True)
+
+mardown = df[df['cell_type'] == 'markdown']
+mardown.source = mardown.source.apply(preprocess_text)
+
+code = df[df['cell_type'] == 'code']
+mardown.source = mardown.source.apply(preprocess_code)
+
+df = pd.concat([mardown, code])
 
 NVALID = 0.1
 
@@ -97,18 +105,20 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data = generate_data(train_df)
-val_data = generate_data(val_df)
+data, train_dict = generate_triplet_random(train_df, 'markdown')
+val_data, val_dict = generate_triplet_random(val_df, 'markdown')
+test_data = generate_data_test(val_df)
 
 dict_cellid_source_train = dict(
     zip(train_df['cell_id'].values, train_df['source'].values))
 dict_cellid_source_val = dict(
     zip(val_df['cell_id'].values, val_df['source'].values))
 
-train_ds = PointWiseDataset(
-    data, dict_cellid_source_train, MAX_LEN)
-val_ds = PointWiseDataset(
-    val_data, dict_cellid_source_val, MAX_LEN)
+train_ds = PairWiseRandomDataset(
+    data, train_dict, dict_cellid_source_train, MAX_LEN)
+val_ds = PairWiseRandomDataset(
+    val_data, val_dict, dict_cellid_source_val, MAX_LEN)
+test_ds = TestDataset(test_data, dict_cellid_source_val, MAX_LEN)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
@@ -116,7 +126,10 @@ train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-EPOCHS = 5
+test_loader = DataLoader(test_ds, batch_size=BS * 2, shuffle=False, num_workers=NW,
+                         pin_memory=False, drop_last=False)
+
+EPOCHS = 100
 max_test_tau = 0
 
 for epoch in range(EPOCHS):
@@ -139,37 +152,44 @@ for epoch in range(EPOCHS):
     net.train()
     lr = adjust_lr(optimizer, epoch)
     with tqdm(total=len(train_ds)) as pbar:
-        for ids, mask, labels in train_loader:
-            loss = train_step(ids.to(device), mask.to(
-                device), labels.to(device))
+        for mark, mark_mask, code, code_mask, labels in train_loader:
+            loss = train_step(mark.to(device), mark_mask.to(device), code.to(
+                device), code_mask.to(device), labels.to(device))
 
-            train_loss += loss * len(ids)
-            total_train += len(ids)
+            train_loss += loss * len(mark)
+            total_train += len(mark)
 
-            pbar.update(len(ids))
+            pbar.update(len(mark))
 
     net.eval()
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
-            for ids, mask, labels in val_loader:
-                loss = test_step(ids.to(device), mask.to(
-                    device), labels.to(device))
+            for mark, mark_mask, code, code_mask, labels in val_loader:
+                loss = test_step(mark.to(device), mark_mask.to(device), code.to(
+                    device), code_mask.to(device), labels.to(device))
 
-                test_loss += loss * len(ids)
-                total_test += len(ids)
+                test_loss += loss * len(mark)
+                total_test += len(mark)
 
-                predicts = predict(ids.to(device), mask.to(
+                pbar.update(len(mark))
+
+        with tqdm(total=len(test_ds)) as pbar:
+            for ids, mask in test_loader:
+
+                predicts = net.get_score(ids.to(device), mask.to(
                     device)).detach().cpu().numpy().ravel()
                 test_preds += predicts.tolist()
 
                 pbar.update(len(ids))
 
-    val_df['pred'] = test_preds
-    y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
+    val_df['pred'] = test_preds.reverse()
+    y_dummy = val_df.sort_values('pred').groupby('id')[
+        'cell_id'].apply(list)
+
     test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
     if test_tau > max_test_tau:
-        torch.save(net.state_dict(), CODE_PATH)
+        torch.save(net.state_dict(), CODE_MARK_PATH)
         max_test_tau = test_tau
 
     print(

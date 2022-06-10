@@ -5,56 +5,40 @@ from transformers import RobertaModel
 from config import BERT_PATH
 
 
-def linear(x):
-    return x
-
-
-def sigmoid(x):
-    return torch.sigmoid(x)
-
-
 class ScoreModel(nn.Module):
-    def __init__(self, pair_mode=False):
+    def __init__(self):
         super(ScoreModel, self).__init__()
         self.bert = RobertaModel.from_pretrained(BERT_PATH)
 
         for param in self.bert.parameters():
             param.requires_grad = False
 
-        self.drop = nn.Dropout(0.2)
+        self.drop = nn.Dropout(0.1)
         self.top = nn.Linear(768, 1)
-        if pair_mode:
-            self.activation = linear
-        else:
-            self.activation = sigmoid
+        self.relu = nn.ReLU()
 
     def forward(self, ids, mask):
         x = self.bert(ids, mask)[0]
-        x = self.drop(x)
+        # x = self.drop(x)
         x = self.top(x[:, 0, :])
-        return self.activation(x)
+        return x
 
 
 class PairWiseModel(nn.Module):
     def __init__(self):
         super(PairWiseModel, self).__init__()
-        self.score_model = ScoreModel(True)
+        self.code_model = ScoreModel()
 
-    def forward(self, ids, mask):
-        left_ids = ids[:, 0, :]
-        right_ids = ids[:, 1, :]
+    def forward(self, mark, mark_mask, code, code_mask):
 
-        left_mask = mask[:, 0, :]
-        right_mask = mask[:, 1, :]
+        mark = self.code_model(mark, mark_mask)
+        code = self.code_model(code, code_mask)
 
-        left = self.score_model(left_ids, left_mask)
-        right = self.score_model(right_ids, right_mask)
-
-        distance = torch.subtract(left, right, alpha=1)
+        distance = torch.subtract(mark, code)
 
         return torch.sigmoid(distance)
 
-    def score(self, ids, mask):
-        score = self.score_model(ids, mask)
+    def get_score(self, mark, mark_mask):
+        score = self.code_model(mark, mark_mask)
 
         return score

@@ -5,6 +5,7 @@ from bisect import bisect
 import nltk
 import numpy as np
 import pandas as pd
+import torch
 from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
 from wordcloud import STOPWORDS
@@ -15,24 +16,12 @@ stemmer = WordNetLemmatizer()
 stopwords = set(STOPWORDS)
 
 
-def re_ranking_list(ids):
-    sort_ids = ids.copy()
-    sort_ids.sort()
-    return [sort_ids.index(i) for i in ids]
-
-
-def re_ranking_list_pct(ids):
-    sort_ids = ids.copy()
-    sort_ids.sort()
-    return [(sort_ids.index(i) / len(ids)) for i in ids]
-
-
 def generate_data(df):
     data = []
 
     for id, df_tmp in tqdm(df.groupby('id')):
         source = df_tmp['cell_id'].to_list()
-        rank = re_ranking_list_pct(df_tmp['rank'].to_list())
+        rank = df_tmp['pct_rank'].to_list()
         for i in range(len(source)):
             data.append([source[i], rank[i]])
 
@@ -50,11 +39,8 @@ def generate_data_test(df):
     return data
 
 
-def generate_triplet(df, mode='train'):
-    triplets = []
-    ids = df.id.unique()
-    random_drop = np.random.random(size=10000) > 0.9
-    count = 0
+def generate_mark_code_dict(df):
+    triplets = {}
 
     for id, df_tmp in tqdm(df.groupby('id')):
         df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
@@ -68,26 +54,18 @@ def generate_triplet(df, mode='train'):
                               for r in df_tmp_code_rank]).astype('int')
 
             for cid, label in zip(df_tmp_code_cell_id, labels):
-                count += 1
                 if label == 1:
-                    triplets.append([cell_id, cid, label])
-                    # triplets.append( [cid, cell_id, label] )
-                elif mode == 'test':
-                    triplets.append([cell_id, cid, label])
-                    # triplets.append( [cid, cell_id, label] )
-                elif random_drop[count % 10000]:
-                    triplets.append([cell_id, cid, label])
-                    # triplets.append( [cid, cell_id, label] )
+                    triplets[cell_id] = cid
 
     return triplets
 
 
-def generate_triplet_random(df):
+def generate_triplet_random(df, type):
     triplets = []
     dict_code = {}
 
     for id, df_tmp in tqdm(df.groupby('id')):
-        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
+        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == type]
 
         df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
         df_tmp_code_cell_id = df_tmp_code['cell_id'].values
@@ -133,6 +111,10 @@ def preprocess_text(document):
 
     preprocessed_text = ' '.join(tokens)
     return preprocessed_text
+
+
+def preprocess_code(cell):
+    return str(cell).replace('\\n', '\n')
 
 
 def check_english(document):
@@ -195,5 +177,29 @@ def adjust_lr(optimizer, epoch):
     return lr
 
 
-def get_ranks(base, derived):
-    return [base.index(d) for d in derived]
+def get_token(mark_id, code_id, dict_cellid_source, max_len, tokenizer):
+    ids = []
+    masks = []
+
+    for id in [mark_id, code_id]:
+        txt = dict_cellid_source[id]
+
+        inputs = tokenizer.encode_plus(
+            txt,
+            None,
+            add_special_tokens=True,
+            max_length=max_len,
+            padding="max_length",
+            return_token_type_ids=True,
+            truncation=True
+        )
+        id = torch.LongTensor(inputs['input_ids'])
+        mask = torch.LongTensor(inputs['attention_mask'])
+
+        id = torch.unsqueeze(id, 0)
+        mask = torch.unsqueeze(mask, 0)
+
+        ids.append(id)
+        masks.append(mask)
+
+    return torch.unsqueeze(torch.cat(ids, 0), 0), torch.unsqueeze(torch.cat(masks, 0), 0)
