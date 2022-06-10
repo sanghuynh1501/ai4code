@@ -102,7 +102,6 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
-val_df[['id', 'cell_id', 'rank', 'cell_type']].to_csv('val_df_1.csv')
 
 data, train_dict = generate_triplet_random(train_df)
 val_data, val_dict = generate_triplet_random(val_df)

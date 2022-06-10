@@ -95,7 +95,6 @@ with torch.no_grad():
 
 # =======================================================================
 feature_dict = dict(zip(df['cell_id'].values, cell_orders))
-df[['id', 'cell_id', 'cell_type', 'rank']].to_csv('predict.csv')
 
 for id, df_tmp in tqdm(df.groupby('id')):
     df_tmp_mark = df_tmp[df_tmp['cell_type'] == 'markdown']
