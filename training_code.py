@@ -7,12 +7,12 @@ from tqdm import tqdm
 
 from config import BS, CODE_MARK_PATH, DATA_DIR, MAX_LEN, NUM_TRAIN, NW
 from dataset import PairWiseRandomDataset, TestDataset
-from helper import (adjust_lr, generate_data_test, generate_triplet_random,
+from helper import (adjust_lr, convert_result, generate_data_test, generate_triplet_random,
                     get_ranks, kendall_tau, preprocess_code, preprocess_text,
                     read_notebook)
 from model import PairWiseModel
 
-device = 'cpu'
+device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
@@ -95,13 +95,6 @@ df.loc[df['cell_type'] == 'code', 'source'] = df[df['cell_type']
                                                  == 'code'].source.apply(preprocess_code)
 
 NVALID = 0.1
-
-
-def convert_result(a):
-    a = (a > 0.5).astype(np.int8)
-
-    return a
-
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
 

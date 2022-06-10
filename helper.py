@@ -65,19 +65,19 @@ def generate_triplet_random(df):
     dict_code = {}
 
     for id, df_tmp in tqdm(df.groupby('id')):
-        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
-
+        df_tmp_mark = df_tmp[df_tmp['cell_type'] == 'markdown']
         df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
-        df_tmp_code_cell_id = df_tmp_code['cell_id'].values
+
+        df_tmp_code_id = df_tmp_code['cell_id'].values
         df_tmp_code_rank = df_tmp_code['rank'].values
 
-        if len(df_tmp_code) > 0 and len(df_tmp_markdown) > 0:
-            for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
+        if len(df_tmp_code) > 0 and len(df_tmp_mark) > 0:
+            for cell_id, rank in df_tmp_mark[['cell_id', 'rank']].values:
                 triplets.append([id, cell_id, rank])
 
             dict_code[id] = {
-                'len': len(df_tmp_code_cell_id),
-                'codes': df_tmp_code_cell_id,
+                'len': len(df_tmp_code_id),
+                'codes': df_tmp_code_id,
                 'ranks': df_tmp_code_rank
             }
 
@@ -203,3 +203,8 @@ def get_token(mark_id, code_id, dict_cellid_source, max_len, tokenizer):
         masks.append(mask)
 
     return torch.unsqueeze(torch.cat(ids, 0), 0), torch.unsqueeze(torch.cat(masks, 0), 0)
+
+
+def convert_result(a):
+    a = (a > 0.5).astype(np.int8)
+    return a

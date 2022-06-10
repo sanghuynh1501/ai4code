@@ -35,7 +35,6 @@ class PairWiseRandomDataset(Dataset):
         if code_rank == mark_rank + 1:
             label = 1
         else:
-            label = 0
             if random.random() > 0.7:
                 idx = -1
                 for i in range(len(note['ranks'])):
