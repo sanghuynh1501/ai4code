@@ -31,7 +31,24 @@ class PairWiseRandomDataset(Dataset):
         code_id = note['codes'][idx]
         code_rank = note['ranks'][idx]
 
-        label = 1 if code_rank > mark_rank else 0
+        label = 0
+        if code_rank == mark_rank + 1:
+            label = 1
+        else:
+            label = 0
+            if random.random() > 0.7:
+                idx = -1
+                for i in range(len(note['ranks'])):
+                    if note['ranks'][i] == mark_rank + 1:
+                        idx = i
+                if idx >= 0:
+                    code_id = note['codes'][idx]
+                    code_rank = note['ranks'][idx]
+                    label = 1
+                else:
+                    label = 0
+            else:
+                label = 0
 
         ids = []
         masks = []

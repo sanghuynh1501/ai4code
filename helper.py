@@ -60,12 +60,12 @@ def generate_mark_code_dict(df):
     return triplets
 
 
-def generate_triplet_random(df, type):
+def generate_triplet_random(df):
     triplets = []
     dict_code = {}
 
     for id, df_tmp in tqdm(df.groupby('id')):
-        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == type]
+        df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
 
         df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
         df_tmp_code_cell_id = df_tmp_code['cell_id'].values

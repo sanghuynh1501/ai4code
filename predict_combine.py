@@ -3,10 +3,12 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from config import BERT_PATH, BS, CODE_MARK_PATH, CODE_PATH, MARK_PATH, MAX_LEN, NW, DATA_DIR
+
+from config import BS, CODE_MARK_PATH, DATA_DIR, MAX_LEN, NW
 from dataset import TestDataset
-from helper import generate_data_test, generate_mark_code_dict, get_ranks, get_token, kendall_tau, preprocess_text, read_notebook
-from model import PairWiseModel, ScoreModel
+from helper import (generate_data_test, get_ranks, kendall_tau,
+                    preprocess_code, preprocess_text, read_notebook)
+from model import PairWiseModel
 
 device = 'cpu'
 torch.cuda.empty_cache()
@@ -15,33 +17,14 @@ torch.manual_seed(0)
 
 
 def cal_distance(a, b):
-    d = a - b
-    return 1/(1 + np.exp(-d))
+    return model_pairse.get_score(torch.from_numpy(a).to(device), torch.from_numpy(b).to(device)).detach().cpu().numpy()
 
-
-def get_code(mar, codes, pairs_hash):
-    max_codes = []
-    for code in codes:
-        score = cal_distance(pairs_hash[mar], pairs_hash[code])
-        if score > 0.5:
-            max_codes.append(code)
-            codes.remove(code)
-    return max_codes, codes
-
-
-# model_code = ScoreModel().to(device)
-# model_code.load_state_dict(torch.load(CODE_PATH))
-# model_code.eval()
-
-# model_markdown = ScoreModel().to(device)
-# model_markdown.load_state_dict(torch.load(MARK_PATH))
-# model_markdown.eval()
 
 model_pairse = PairWiseModel().to(device)
-model_pairse.load_state_dict(torch.load(CODE_PATH))
+model_pairse.load_state_dict(torch.load(CODE_MARK_PATH))
 model_pairse.eval()
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[20000:20010]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:10]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -80,104 +63,53 @@ df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-df["pct_rank"] = df["rank"] / df.groupby("id")["cell_id"].transform("count")
 
-df_code = df[df['cell_type'] == 'code'].reset_index(drop=True)
-df_mark = df[df['cell_type'] == 'markdown'].reset_index(drop=True)
-df_mark.source = df_mark.source.apply(preprocess_text)
+df.loc[df['cell_type'] == 'markdown', 'source'] = df[df['cell_type']
+                                                     == 'markdown'].source.apply(preprocess_text)
+df.loc[df['cell_type'] == 'code', 'source'] = df[df['cell_type']
+                                                 == 'code'].source.apply(preprocess_code)
 
-data_code = generate_data_test(df_code)
-data_mark = generate_data_test(df_mark)
-
+data = generate_data_test(df)
 
 dict_cellid_source = dict(zip(df['cell_id'].values, df['source'].values))
 
-val_code = TestDataset(data_code, dict_cellid_source, MAX_LEN)
-val_mark = TestDataset(data_mark, dict_cellid_source, MAX_LEN)
+val_data = TestDataset(data, dict_cellid_source, MAX_LEN)
 
-loader_code = DataLoader(val_code, batch_size=BS * 2, shuffle=False, num_workers=NW,
-                         pin_memory=False, drop_last=False)
-
-loader_mark = DataLoader(val_mark, batch_size=BS * 2, shuffle=False, num_workers=NW,
-                         pin_memory=False, drop_last=False)
+val_loader = DataLoader(val_data, batch_size=BS * 2, shuffle=False, num_workers=NW,
+                        pin_memory=False, drop_last=False)
 
 with torch.no_grad():
-    code_orders = []
-    with tqdm(total=len(val_code)) as pbar:
-        for ids, mask in loader_code:
+    cell_orders = None
+    with tqdm(total=len(val_data)) as pbar:
+        for ids, mask in val_loader:
 
-            predicts = model_pairse.get_score(ids.to(device), mask.to(
-                device)).detach().cpu().numpy().ravel()
-            code_orders += predicts.tolist()
+            predicts = model_pairse.get_feature(ids.to(device), mask.to(
+                device)).detach().cpu().numpy()
+
+            if cell_orders is None:
+                cell_orders = predicts
+            else:
+                cell_orders = np.concatenate([cell_orders, predicts], 0)
 
             pbar.update(len(ids))
 
-    # mark_orders = []
-    # with tqdm(total=len(val_mark)) as pbar:
-    #     for ids, mask in loader_mark:
-
-    #         predicts = model_pairse.get_mark_score(ids.to(device), mask.to(
-    #             device)).detach().cpu().numpy().ravel()
-    #         mark_orders += predicts.tolist()
-
-    #         pbar.update(len(ids))
-
 # =======================================================================
-df_code['pred'] = code_orders
-y_dummy = df_code.groupby('id')['cell_id'].apply(list)
-test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
-print('test tau code ', test_tau)
-
-# =======================================================================
-# df_mark['pred'] = mark_orders
-# y_dummy = df_mark.sort_values('pred').groupby('id')['cell_id'].apply(list)
-# test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
-# print('test tau mark ', test_tau)
-
-# # df_mark = y_dummy.to_frame()
-# # df_mark.reset_index(inplace=True)
-# # marks = df_mark['cell_id'].tolist()
-
-# # results = []
-# # for mark, code in zip(marks, codes):
-# #     result = []
-# #     for id, ma in enumerate(mark):
-# #         result.append(ma)
-# #         if ma in markcode:
-# #             print(ma, markcode[ma])
-# #             result.append(markcode[ma])
-# #     results.append(result)
-
-# # test_tau = kendall_tau(df_orders.loc[ids].tolist(), results)
-# # print('test tau ', test_tau)
-
-df.loc[df["cell_type"] == "code", "pred"] = code_orders
-# # df.loc[df["cell_type"] == "markdown", "pred"] = mark_orders
+feature_dict = dict(zip(df['cell_id'].values, cell_orders))
+df[['id', 'cell_id', 'cell_type', 'rank']].to_csv('predict.csv')
 
 for id, df_tmp in tqdm(df.groupby('id')):
-    df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
+    df_tmp_mark = df_tmp[df_tmp['cell_type'] == 'markdown']
     df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
 
-    df_tmp_code_pred = df_tmp_code['pred'].values
-    df_tmp_code_cell_id = df_tmp_code['cell_id'].values
+    df_tmp_mark_id = df_tmp_mark['cell_id'].values
+    df_tmp_mark_rank = df_tmp_mark['rank'].values
 
-    df_tmp_mark_pred = df_tmp_markdown['pred'].values
-    df_tmp_mark_cell_id = df_tmp_markdown['cell_id'].values
+    df_tmp_code_id = df_tmp_code['cell_id'].values
+    df_tmp_code_rank = df_tmp_code['rank'].values
 
-    result_preds = df_tmp_code_pred
-    results = df_tmp_code_cell_id
-
-    print('==============================================================')
-    print('result_preds ', result_preds)
-
-#     for mark_pred, mark_id in zip(df_tmp_mark_pred, df_tmp_mark_cell_id):
-#         print([(cal_distance(mark_pred, pred)) for pred in result_preds])
-
-
-# df.loc[df["cell_type"] == "markdown", "pred"] = mark_orders
-# # df.loc[df["cell_type"] == "code", "pred"] = code_orders
-# # df.loc[df["cell_type"] == "code", "pred"] = code_orders
-# sub_df = df.sort_values("pred").groupby("id")["cell_id"].apply(list)
-# test_tau = kendall_tau(df_orders.loc[sub_df.index], sub_df)
-
-# print('test tau ', test_tau)
+    print('================================================================')
+    for i in range(len(df_tmp_mark)):
+        for j in range(len(df_tmp_code)):
+            if df_tmp_mark_rank[i] + 1 == df_tmp_code_rank[j]:
+                print(df_tmp_mark_id[i], df_tmp_code_id[j], cal_distance(
+                    feature_dict[df_tmp_mark_id[i]], feature_dict[df_tmp_code_id[j]]))

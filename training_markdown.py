@@ -87,7 +87,7 @@ df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 df = df.reset_index().merge(
     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
 
-df["pct_rank"] = df["rank"] / df.groupby("id")["cell_id"].transform("count")
+df['pct_rank'] = df['rank'] / df.groupby('id')['cell_id'].transform('count')
 df = df[df['cell_type'] == 'markdown'].reset_index(drop=True)
 
 df.source = df.source.apply(preprocess_text)
