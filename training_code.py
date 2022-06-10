@@ -167,131 +167,54 @@ for epoch in range(EPOCHS):
     lr = adjust_lr(optimizer, epoch)
     with tqdm(total=len(train_ds)) as pbar:
         for mark, mark_mask, code, code_mask, labels in train_loader:
-            # loss = train_step(mark.to(device), mark_mask.to(device), code.to(
-            #     device), code_mask.to(device), labels.to(device))
+            loss = train_step(mark.to(device), mark_mask.to(device), code.to(
+                device), code_mask.to(device), labels.to(device))
 
-            # train_loss += loss * len(mark)
-            # total_train += len(mark)
+            train_loss += loss * len(mark)
+            total_train += len(mark)
 
-            # train_label_trues += np.sum(labels.cpu().numpy().ravel()
-            #                             == 1).astype(np.int32)
-            # train_label_falses += np.sum(labels.cpu().numpy().ravel()
-            #                              == 0).astype(np.int32)
+            train_label_trues += np.sum(labels.cpu().numpy().ravel()
+                                        == 1).astype(np.int32)
+            train_label_falses += np.sum(labels.cpu().numpy().ravel()
+                                         == 0).astype(np.int32)
 
             pbar.update(len(mark))
 
-    # net.eval()
-    # with torch.no_grad():
-    #     with tqdm(total=len(val_ds)) as pbar:
-    #         for mark, mark_mask, code, code_mask, labels in val_loader:
-    #             loss = test_step(mark.to(device), mark_mask.to(device), code.to(
-    #                 device), code_mask.to(device), labels.to(device))
+    net.eval()
+    with torch.no_grad():
+        with tqdm(total=len(val_ds)) as pbar:
+            for mark, mark_mask, code, code_mask, labels in val_loader:
+                loss = test_step(mark.to(device), mark_mask.to(device), code.to(
+                    device), code_mask.to(device), labels.to(device))
 
-    #             test_loss += loss * len(mark)
-    #             total_test += len(mark)
+                test_loss += loss * len(mark)
+                total_test += len(mark)
 
-    #             predicts = predict(mark.to(device), mark_mask.to(device), code.to(
-    #                 device), code_mask.to(device)).detach().cpu().numpy().ravel()
-    #             test_preds += predicts.tolist()
+                predicts = predict(mark.to(device), mark_mask.to(device), code.to(
+                    device), code_mask.to(device)).detach().cpu().numpy().ravel()
+                test_preds += predicts.tolist()
 
-    #             total_true += np.sum(labels.cpu().numpy().ravel()
-    #                                  == convert_result(predicts)).astype(np.int32)
+                total_true += np.sum(labels.cpu().numpy().ravel()
+                                     == convert_result(predicts)).astype(np.int32)
 
-    #             val_label_trues += np.sum(labels.cpu().numpy().ravel()
-    #                                       == 1).astype(np.int32)
-    #             val_label_falses += np.sum(labels.cpu().numpy().ravel()
-    #                                        == 0).astype(np.int32)
+                val_label_trues += np.sum(labels.cpu().numpy().ravel()
+                                          == 1).astype(np.int32)
+                val_label_falses += np.sum(labels.cpu().numpy().ravel()
+                                           == 0).astype(np.int32)
 
-    #             pbar.update(len(mark))
+                pbar.update(len(mark))
 
-    # test_accuracy = (total_true / total_test)
-    # torch.save(net.state_dict(), CODE_MARK_PATH)
+    test_accuracy = (total_true / total_test)
+    torch.save(net.state_dict(), CODE_MARK_PATH)
 
-    # print(train_label_falses / (train_label_falses + train_label_trues))
-    # print(val_label_falses / (val_label_falses + val_label_trues))
-    # print(sum(test_preds) / len(test_preds))
+    print(train_label_falses / (train_label_falses + train_label_trues))
+    print(val_label_falses / (val_label_falses + val_label_trues))
+    print(sum(test_preds) / len(test_preds))
 
-    # print(
-    #     f'Epoch {epoch + 1}, \n'
-    #     f'Loss: {train_loss / total_train}, '
-    #     f'Test Loss: {test_loss / total_test}, '
-    #     f'Test Accuracy: {test_accuracy * 100}, '
-    #     f'Test Tau: {test_tau} '
-    # )
-
-
-# ============================================================================================================
-# paths_train = list((DATA_DIR / 'train').glob('*.json'))[:200]
-# notebooks_train = [
-#     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
-# ]
-
-# df = (
-#     pd.concat(notebooks_train)
-#     .set_index('id', append=True)
-#     .swaplevel()
-#     .sort_index(level='id', sort_remaining=False)
-# )
-
-# df_orders = pd.read_csv(
-#     DATA_DIR / 'train_orders.csv',
-#     index_col='id',
-#     squeeze=True,
-# ).str.split()
-
-# df_orders_ = df_orders.to_frame().join(
-#     df.reset_index('cell_id').groupby('id')['cell_id'].apply(list),
-#     how='right',
-# )
-
-# ranks = {}
-# for id_, cell_order, cell_id in df_orders_.itertuples():
-#     ranks[id_] = {'cell_id': cell_id, 'rank': get_ranks(cell_order, cell_id)}
-
-# df_ranks = (
-#     pd.DataFrame
-#     .from_dict(ranks, orient='index')
-#     .rename_axis('id')
-#     .apply(pd.Series.explode)
-#     .set_index('cell_id', append=True)
-# )
-
-# df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
-
-# df = df.reset_index().merge(
-#     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-
-# mardown = df[df['cell_type'] == 'markdown']
-# mardown.source = mardown.source.apply(preprocess_text)
-
-# code = df[df['cell_type'] == 'code']
-# code.source = code.source.apply(preprocess_code)
-
-# df = pd.concat([mardown, code])
-
-# df = df.loc[val_ind].reset_index(drop=True)
-# data = generate_data_test(df)
-
-# dict_cellid_source = dict(zip(df['cell_id'].values, df['source'].values))
-
-# val_data = TestDataset(data, dict_cellid_source, MAX_LEN)
-
-# val_loader = DataLoader(val_data, batch_size=BS * 2, shuffle=False, num_workers=NW,
-#                         pin_memory=False, drop_last=False)
-
-# with torch.no_grad():
-#     cell_orders = []
-#     with tqdm(total=len(val_data)) as pbar:
-#         for ids, mask in val_loader:
-
-#             predicts = net.get_score(ids.to(device), mask.to(
-#                 device)).detach().cpu().numpy().ravel()
-#             cell_orders += predicts.tolist()
-
-#             pbar.update(len(ids))
-
-# # =======================================================================
-# df['pred'] = cell_orders.reverse()
-# y_dummy = df.sort_values('pred').groupby('id')['cell_id'].apply(list)
-# test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
-# print('test tau ', test_tau)
+    print(
+        f'Epoch {epoch + 1}, \n'
+        f'Loss: {train_loss / total_train}, '
+        f'Test Loss: {test_loss / total_test}, '
+        f'Test Accuracy: {test_accuracy * 100}, '
+        f'Test Tau: {test_tau} '
+    )
