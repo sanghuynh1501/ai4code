@@ -3,10 +3,10 @@ import pandas as pd
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import BS, DATA_DIR, MARK_PATH, NW
+from config import DATA_DIR, MARK_PATH
 from dataset import MarkdownDataset
 from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
                     read_notebook)
@@ -144,62 +144,64 @@ max_test_tau = 0
 for epoch in range(EPOCHS):
 
     train_loss = 0
-    test_loss = 0
-
-    train_trues, train_preds = [], []
-    test_trues, test_preds, id_info_list = [], [], []
-
-    train_tau = 0
-    test_tau = 0
-
-    train_accuracy = 0
-    test_accuracy = 0
-
     total_train = 0
-    total_test = 0
     idx = 0
 
-    model.train()
     with tqdm(total=len(train_ds)) as pbar:
         for (ids, mask, fts, labels) in train_loader:
+            model.train()
             loss = train_step(ids.to(device), mask.to(
                 device), fts.to(device), labels.to(device), idx, int(len(train_ds) / BS))
 
             train_loss += loss * len(ids)
             total_train += len(ids)
+
+            if idx % 200 == 0:
+
+                test_loss = 0
+                total_test = 0
+                test_accuracy = 0
+                test_tau = 0
+                test_preds = []
+
+                model.eval()
+                with torch.no_grad():
+                    with tqdm(total=len(val_ds)) as tpbar:
+                        for tids, tmask, tfts, tlabels in val_loader:
+                            loss = test_step(tids.to(device), tmask.to(
+                                device), tfts.to(device), tlabels.to(device))
+
+                            test_loss += loss * len(tids)
+                            total_test += len(tids)
+
+                            predicts = predict(tids.to(device), tmask.to(
+                                device), tfts.to(device)).detach().cpu().numpy().ravel()
+                            test_preds += predicts.tolist()
+
+                            tpbar.update(len(tids))
+
+                val_df['rank'] = val_df.groupby(['id', 'cell_type']).cumcount()
+                val_df['pred'] = val_df.groupby(['id', 'cell_type'])[
+                    'rank'].rank(pct=True)
+                val_df.loc[val_df['cell_type'] ==
+                           'markdown', 'pred'] = test_preds
+                y_dummy = val_df.sort_values('pred').groupby('id')[
+                    'cell_id'].apply(list)
+                test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
+
+                if test_tau > max_test_tau:
+                    torch.save(model.state_dict(), MARK_PATH)
+                    max_test_tau = test_tau
+
+                print(
+                    f'Epoch {epoch + 1}, Step {idx}:\n'
+                    f'Loss: {train_loss / total_train}, '
+                    f'Test Loss: {test_loss / total_test}, '
+                    f'Test Tau: {test_tau} '
+                )
+
+                train_loss = 0
+                total_train = 0
+
             idx += 1
-
             pbar.update(len(ids))
-
-    model.eval()
-    with torch.no_grad():
-        with tqdm(total=len(val_ds)) as pbar:
-            for ids, mask, fts, labels in val_loader:
-                loss = test_step(ids.to(device), mask.to(
-                    device), fts.to(device), labels.to(device))
-
-                test_loss += loss * len(ids)
-                total_test += len(ids)
-
-                predicts = predict(ids.to(device), mask.to(
-                    device), fts.to(device)).detach().cpu().numpy().ravel()
-                test_preds += predicts.tolist()
-
-                pbar.update(len(ids))
-
-    val_df['rank'] = val_df.groupby(['id', 'cell_type']).cumcount()
-    val_df['pred'] = val_df.groupby(['id', 'cell_type'])['rank'].rank(pct=True)
-    val_df.loc[val_df['cell_type'] == 'markdown', 'pred'] = test_preds
-    y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
-    test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
-
-    if test_tau > max_test_tau:
-        torch.save(model.state_dict(), MARK_PATH)
-        max_test_tau = test_tau
-
-    print(
-        f'Epoch {epoch + 1}, \n'
-        f'Loss: {train_loss / total_train}, '
-        f'Test Loss: {test_loss / total_test}, '
-        f'Test Tau: {test_tau} '
-    )
