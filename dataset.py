@@ -1,143 +1,67 @@
-import random
-
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
-from config import BERT_PATH
+from config import BERT_MODEL_PATH
 
 
-class PairWiseRandomDataset(Dataset):
+class MarkdownDataset(Dataset):
 
-    def __init__(self, df, dict_code, dict_cellid_source, max_len):
+    def __init__(self, df, total_max_len, md_max_len, fts):
         super().__init__()
-        self.df = df
-        self.max_len = max_len
-        self.dict_code = dict_code
-        self.dict_cellid_source = dict_cellid_source
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            BERT_PATH, do_lower_case=True)
+        self.df = df.reset_index(drop=True)
+        self.md_max_len = md_max_len
+        self.total_max_len = total_max_len  # maxlen allowed by model config
+        self.tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_PATH)
+        self.fts = fts
 
     def __getitem__(self, index):
-        row = self.df[index]
-        note_id = row[0]
+        row = self.df.iloc[index]
 
-        mark_id = row[1]
-        mark_rank = row[2]
-
-        note = self.dict_code[note_id]
-
-        idx = random.randint(0, len(note['codes']) - 1)
-        code_id = note['codes'][idx]
-        code_rank = note['ranks'][idx]
-
-        label = 0
-        if code_rank == mark_rank + 1:
-            label = 1
+        inputs = self.tokenizer.encode_plus(
+            row.source,
+            None,
+            add_special_tokens=True,
+            max_length=self.md_max_len,
+            padding='max_length',
+            return_token_type_ids=True,
+            truncation=True
+        )
+        code_inputs = self.tokenizer.batch_encode_plus(
+            [str(x) for x in self.fts[row.id]['codes']],
+            add_special_tokens=True,
+            max_length=23,
+            padding='max_length',
+            truncation=True
+        )
+        n_md = self.fts[row.id]['total_md']
+        n_code = self.fts[row.id]['total_md']
+        if n_md + n_code == 0:
+            fts = torch.FloatTensor([0])
         else:
-            if random.random() > 0.7:
-                idx = -1
-                for i in range(len(note['ranks'])):
-                    if note['ranks'][i] == mark_rank + 1:
-                        idx = i
-                if idx >= 0:
-                    code_id = note['codes'][idx]
-                    code_rank = note['ranks'][idx]
-                    label = 1
-                else:
-                    label = 0
-            else:
-                label = 0
+            fts = torch.FloatTensor([n_md / (n_md + n_code)])
 
-        ids = []
-        masks = []
+        ids = inputs['input_ids']
+        for x in code_inputs['input_ids']:
+            ids.extend(x[:-1])
+        ids = ids[:self.total_max_len]
+        if len(ids) != self.total_max_len:
+            ids = ids + [self.tokenizer.pad_token_id, ] * \
+                (self.total_max_len - len(ids))
+        ids = torch.LongTensor(ids)
 
-        for id in [mark_id, code_id]:
-            txt = self.dict_cellid_source[id]
+        mask = inputs['attention_mask']
+        for x in code_inputs['attention_mask']:
+            mask.extend(x[:-1])
+        mask = mask[:self.total_max_len]
+        if len(mask) != self.total_max_len:
+            mask = mask + [self.tokenizer.pad_token_id, ] * \
+                (self.total_max_len - len(mask))
+        mask = torch.LongTensor(mask)
 
-            inputs = self.tokenizer.encode_plus(
-                txt,
-                None,
-                add_special_tokens=True,
-                max_length=self.max_len,
-                padding='max_length',
-                return_token_type_ids=True,
-                truncation=True
-            )
-            id = torch.LongTensor(inputs['input_ids'])
-            mask = torch.LongTensor(inputs['attention_mask'])
+        assert len(ids) == self.total_max_len
 
-            ids.append(id)
-            masks.append(mask)
-
-        return ids[0], masks[0], ids[1], masks[1], torch.FloatTensor([label])
+        return ids, mask, fts, torch.FloatTensor([row.pct_rank])
 
     def __len__(self):
-        return len(self.df)
-
-
-class PointWiseDataset(Dataset):
-
-    def __init__(self, df, dict_cellid_source, max_len):
-        super().__init__()
-        self.df = df
-        self.max_len = max_len
-        self.dict_cellid_source = dict_cellid_source
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            BERT_PATH, do_lower_case=True)
-
-    def __getitem__(self, index):
-        row = self.df[index]
-        text_id, label = row
-
-        txt = self.dict_cellid_source[text_id]
-
-        inputs = self.tokenizer.encode_plus(
-            txt,
-            None,
-            add_special_tokens=True,
-            max_length=self.max_len,
-            padding='max_length',
-            return_token_type_ids=True,
-            truncation=True
-        )
-        id = torch.LongTensor(inputs['input_ids'])
-        mask = torch.LongTensor(inputs['attention_mask'])
-
-        return id, mask, torch.FloatTensor([label])
-
-    def __len__(self):
-        return len(self.df)
-
-
-class TestDataset(Dataset):
-
-    def __init__(self, df, dict_cellid_source, max_len):
-        super().__init__()
-        self.df = df
-        self.max_len = max_len
-        self.dict_cellid_source = dict_cellid_source
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            BERT_PATH, do_lower_case=True)
-
-    def __getitem__(self, index):
-        text_id = self.df[index]
-
-        txt = self.dict_cellid_source[text_id]
-
-        inputs = self.tokenizer.encode_plus(
-            txt,
-            None,
-            add_special_tokens=True,
-            max_length=self.max_len,
-            padding='max_length',
-            return_token_type_ids=True,
-            truncation=True
-        )
-        id = torch.LongTensor(inputs['input_ids'])
-        mask = torch.LongTensor(inputs['attention_mask'])
-
-        return id, mask
-
-    def __len__(self):
-        return len(self.df)
+        return self.df.shape[0]

@@ -4,50 +4,53 @@ import torch
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import BS, DATA_DIR, MARK_PATH, MAX_LEN, NUM_TRAIN, NW
-from dataset import PointWiseDataset
-from helper import (adjust_lr, check_english, generate_data, get_ranks, kendall_tau, preprocess_text,
+from config import BS, DATA_DIR, MARK_PATH, NW
+from dataset import MarkdownDataset
+from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
                     read_notebook)
-from model import ScoreModel
+from model import MarkdownModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-net = ScoreModel().to(device)
-criterion = torch.nn.MSELoss()
-optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters(
-)), lr=3e-4, betas=(0.9, 0.999), eps=1e-08)
+model = MarkdownModel().to(device)
 
 
-def train_step(ids, mask, labels):
+def train_step(ids, mask, fts, labels, idx, max_len):
     optimizer.zero_grad()
 
-    outputs = net(ids, mask)
+    with torch.cuda.amp.autocast():
+        pred = model(ids, mask, fts)
+        loss = criterion(pred, labels)
 
-    loss = criterion(outputs, labels)
-    loss.backward()
-    optimizer.step()
-
-    return loss.item()
-
-
-def test_step(ids, mask, labels):
-    outputs = net(ids, mask)
-    loss = criterion(outputs, labels)
+    scaler.scale(loss).backward()
+    if idx % accumulation_steps == 0 or idx == max_len - 1:
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+        scheduler.step()
 
     return loss.item()
 
 
-def predict(ids, mask):
-    predictions = net(ids, mask)
+def test_step(ids, mask, fts, labels):
+    outputs = model(ids, mask, fts)
+    loss = criterion(outputs, labels)
+
+    return loss.item()
+
+
+def predict(ids, mask, fts):
+    predictions = model(ids, mask, fts)
 
     return predictions
 
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[:NUM_TRAIN]
+paths_train = list((DATA_DIR / 'train').glob('*.json'))
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -86,41 +89,54 @@ df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
 
 df = df.reset_index().merge(
     df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-
 df['pct_rank'] = df['rank'] / df.groupby('id')['cell_id'].transform('count')
-df = df[df['cell_type'] == 'markdown'].reset_index(drop=True)
-
-df.source = df.source.apply(preprocess_text)
 
 NVALID = 0.1
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
-
 train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
-
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-data = generate_data(train_df)
-val_data = generate_data(val_df)
+train_df_mark = train_df[train_df['cell_type']
+                         == 'markdown'].reset_index(drop=True)
+train_df_mark.source = train_df_mark.source.apply(preprocess_text)
 
-dict_cellid_source_train = dict(
-    zip(train_df['cell_id'].values, train_df['source'].values))
-dict_cellid_source_val = dict(
-    zip(val_df['cell_id'].values, val_df['source'].values))
+val_df_mark = val_df[val_df['cell_type'] == 'markdown'].reset_index(drop=True)
+val_df_mark.source = val_df_mark.source.apply(preprocess_text)
 
-train_ds = PointWiseDataset(
-    data, dict_cellid_source_train, MAX_LEN)
-val_ds = PointWiseDataset(
-    val_data, dict_cellid_source_val, MAX_LEN)
+train_fts = get_features(train_df)
+val_fts = get_features(val_df)
 
+train_ds = MarkdownDataset(train_df_mark, md_max_len=64,
+                           total_max_len=512, fts=train_fts)
+val_ds = MarkdownDataset(val_df_mark, md_max_len=64,
+                         total_max_len=512, fts=val_fts)
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
-
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-EPOCHS = 5
+param_optimizer = list(model.named_parameters())
+no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+optimizer_grouped_parameters = [
+    {'params': [p for n, p in param_optimizer if not any(
+        nd in n for nd in no_decay)], 'weight_decay': 0.01},
+    {'params': [p for n, p in param_optimizer if any(
+        nd in n for nd in no_decay)], 'weight_decay': 0.0}
+]
+
+num_train_optimization_steps = int(5 * len(train_loader) / 4)
+optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
+                  correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
+scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
+                                            num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
+
+criterion = torch.nn.L1Loss()
+scaler = torch.cuda.amp.GradScaler()
+
+EPOCHS = 100
+accumulation_steps = 4
 max_test_tau = 0
 
 for epoch in range(EPOCHS):
@@ -139,41 +155,44 @@ for epoch in range(EPOCHS):
 
     total_train = 0
     total_test = 0
+    idx = 0
 
-    net.train()
-    lr = adjust_lr(optimizer, epoch)
+    model.train()
     with tqdm(total=len(train_ds)) as pbar:
-        for ids, mask, labels in train_loader:
+        for (ids, mask, fts, labels) in train_loader:
             loss = train_step(ids.to(device), mask.to(
-                device), labels.to(device))
+                device), fts.to(device), labels.to(device), idx, int(len(train_ds) / BS))
 
             train_loss += loss * len(ids)
             total_train += len(ids)
+            idx += 1
 
             pbar.update(len(ids))
 
-    net.eval()
+    model.eval()
     with torch.no_grad():
         with tqdm(total=len(val_ds)) as pbar:
-            for ids, mask, labels in val_loader:
+            for ids, mask, fts, labels in val_loader:
                 loss = test_step(ids.to(device), mask.to(
-                    device), labels.to(device))
+                    device), fts.to(device), labels.to(device))
 
                 test_loss += loss * len(ids)
                 total_test += len(ids)
 
                 predicts = predict(ids.to(device), mask.to(
-                    device)).detach().cpu().numpy().ravel()
+                    device), fts.to(device)).detach().cpu().numpy().ravel()
                 test_preds += predicts.tolist()
 
                 pbar.update(len(ids))
 
-    val_df['pred'] = test_preds
+    val_df['rank'] = val_df.groupby(['id', 'cell_type']).cumcount()
+    val_df['pred'] = val_df.groupby(['id', 'cell_type'])['rank'].rank(pct=True)
+    val_df.loc[val_df['cell_type'] == 'markdown', 'pred'] = test_preds
     y_dummy = val_df.sort_values('pred').groupby('id')['cell_id'].apply(list)
     test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
     if test_tau > max_test_tau:
-        torch.save(net.state_dict(), MARK_PATH)
+        torch.save(model.state_dict(), MARK_PATH)
         max_test_tau = test_tau
 
     print(
