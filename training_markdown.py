@@ -126,7 +126,11 @@ optimizer_grouped_parameters = [
         nd in n for nd in no_decay)], 'weight_decay': 0.0}
 ]
 
-num_train_optimization_steps = int(5 * len(train_loader) / 4)
+EPOCHS = 5
+accumulation_steps = 4
+
+num_train_optimization_steps = int(
+    EPOCHS * len(train_loader) / accumulation_steps)
 optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
                   correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
 scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
@@ -135,8 +139,6 @@ scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * n
 criterion = torch.nn.L1Loss()
 scaler = torch.cuda.amp.GradScaler()
 
-EPOCHS = 100
-accumulation_steps = 4
 max_test_tau = 0
 
 for epoch in range(EPOCHS):
