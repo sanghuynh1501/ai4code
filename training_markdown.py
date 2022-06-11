@@ -21,37 +21,6 @@ torch.manual_seed(0)
 
 model = MarkdownModel().to(device)
 
-
-def train_step(ids, mask, fts, labels, idx, max_len):
-    optimizer.zero_grad()
-
-    with torch.cuda.amp.autocast():
-        pred = model(ids, mask, fts)
-        loss = criterion(pred, labels)
-
-    scaler.scale(loss).backward()
-    if idx % accumulation_steps == 0 or idx == max_len - 1:
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
-        scheduler.step()
-
-    return loss.item()
-
-
-def test_step(ids, mask, fts, labels):
-    outputs = model(ids, mask, fts)
-    loss = criterion(outputs, labels)
-
-    return loss.item()
-
-
-def predict(ids, mask, fts):
-    predictions = model(ids, mask, fts)
-
-    return predictions
-
-
 paths_train = list((DATA_DIR / 'train').glob('*.json'))[:1000]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
