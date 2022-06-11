@@ -1,16 +1,11 @@
+import sys
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
-from transformers import AdamW, get_linear_schedule_with_warmup
-
-from config import DATA_DIR, MARK_PATH
-from dataset import MarkdownDataset
-from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
-                    read_notebook)
-from model import MarkdownModel
+from transformers import get_linear_schedule_with_warmup, AdamW
 
 device = 'cuda'
 torch.cuda.empty_cache()
@@ -26,7 +21,7 @@ def train_step(ids, mask, fts, labels, idx, max_len):
     with torch.cuda.amp.autocast():
         pred = model(ids, mask, fts)
         loss = criterion(pred, labels)
-
+        
     scaler.scale(loss).backward()
     if idx % accumulation_steps == 0 or idx == max_len - 1:
         scaler.step(optimizer)
@@ -50,7 +45,7 @@ def predict(ids, mask, fts):
     return predictions
 
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))
+paths_train = list((DATA_DIR / 'train').glob('*.json'))[:1000]
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
 ]
@@ -95,8 +90,10 @@ NVALID = 0.1
 
 splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
 train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
+
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
+val_df = val_df[:4000]
 
 train_df_mark = train_df[train_df['cell_type']
                          == 'markdown'].reset_index(drop=True)
@@ -141,67 +138,80 @@ scaler = torch.cuda.amp.GradScaler()
 
 max_test_tau = 0
 
-for epoch in range(EPOCHS):
 
-    train_loss = 0
-    total_train = 0
-    idx = 0
+def validate(model, val_loader):
+    model.eval()
 
-    with tqdm(total=len(train_ds)) as pbar:
-        for (ids, mask, fts, labels) in train_loader:
-            model.train()
-            loss = train_step(ids.to(device), mask.to(
-                device), fts.to(device), labels.to(device), idx, int(len(train_ds) / BS))
+    tbar = tqdm(val_loader, file=sys.stdout)
 
-            train_loss += loss * len(ids)
-            total_train += len(ids)
+    preds = []
+    labels = []
 
-            if idx % 200 == 0:
+    with torch.no_grad():
+        for idx, (ids, mask, fts, target) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device), fts.to(device))
 
-                test_loss = 0
-                total_test = 0
-                test_accuracy = 0
-                test_tau = 0
-                test_preds = []
+            preds.append(pred.detach().cpu().numpy().ravel())
+            labels.append(target.detach().cpu().numpy().ravel())
 
-                model.eval()
-                with torch.no_grad():
-                    with tqdm(total=len(val_ds)) as tpbar:
-                        for tids, tmask, tfts, tlabels in val_loader:
-                            loss = test_step(tids.to(device), tmask.to(
-                                device), tfts.to(device), tlabels.to(device))
+    return np.concatenate(labels), np.concatenate(preds)
 
-                            test_loss += loss * len(tids)
-                            total_test += len(tids)
 
-                            predicts = predict(tids.to(device), tmask.to(
-                                device), tfts.to(device)).detach().cpu().numpy().ravel()
-                            test_preds += predicts.tolist()
+def train(model, train_loader, val_loader, epochs):
+    np.random.seed(0)
+    # Creating optimizer and lr schedulers
+    param_optimizer = list(model.named_parameters())
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
 
-                            tpbar.update(len(tids))
+    num_train_optimization_steps = int(epochs * len(train_loader) / accumulation_steps)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
+                      correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
+                                                num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
 
-                val_df['rank'] = val_df.groupby(['id', 'cell_type']).cumcount()
-                val_df['pred'] = val_df.groupby(['id', 'cell_type'])[
-                    'rank'].rank(pct=True)
-                val_df.loc[val_df['cell_type'] ==
-                           'markdown', 'pred'] = test_preds
-                y_dummy = val_df.sort_values('pred').groupby('id')[
-                    'cell_id'].apply(list)
-                test_tau = kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
+    criterion = torch.nn.L1Loss()
+    scaler = torch.cuda.amp.GradScaler()
 
-                if test_tau > max_test_tau:
-                    torch.save(model.state_dict(), MARK_PATH)
-                    max_test_tau = test_tau
+    for e in range(epochs):
+        model.train()
+        tbar = tqdm(train_loader, file=sys.stdout)
+        loss_list = []
+        preds = []
+        labels = []
 
-                print(
-                    f'Epoch {epoch + 1}, Step {idx}:\n'
-                    f'Loss: {train_loss / total_train}, '
-                    f'Test Loss: {test_loss / total_test}, '
-                    f'Test Tau: {test_tau} '
-                )
+        for idx, (ids, mask, fts, target) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device), fts.to(device))
+                loss = criterion(pred, target.to(device))
+            scaler.scale(loss).backward()
+            if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                scheduler.step()
 
-                train_loss = 0
-                total_train = 0
+            loss_list.append(loss.detach().cpu().item())
+            preds.append(pred.detach().cpu().numpy().ravel())
+            labels.append(target.detach().cpu().numpy().ravel())
 
-            idx += 1
-            pbar.update(len(ids))
+            avg_loss = np.round(np.mean(loss_list), 4)
+
+            tbar.set_description(f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
+
+        y_val, y_pred = validate(model, val_loader)
+        val_df["pred"] = val_df.groupby(["id", "cell_type"])["rank"].rank(pct=True)
+        val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
+        y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+        print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+
+    return model, y_pred
+
+
+model = MarkdownModel()
+model = model.cuda()
+model, y_pred = train(model, train_loader, val_loader, epochs=EPOCHS)
