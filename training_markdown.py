@@ -1,11 +1,18 @@
 import sys
+
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
-from transformers import get_linear_schedule_with_warmup, AdamW
+from transformers import AdamW, get_linear_schedule_with_warmup
+
+from config import BS, DATA_DIR, NW
+from dataset import MarkdownDataset
+from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
+                    read_notebook)
+from model import MarkdownModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
@@ -21,7 +28,7 @@ def train_step(ids, mask, fts, labels, idx, max_len):
     with torch.cuda.amp.autocast():
         pred = model(ids, mask, fts)
         loss = criterion(pred, labels)
-        
+
     scaler.scale(loss).backward()
     if idx % accumulation_steps == 0 or idx == max_len - 1:
         scaler.step(optimizer)
@@ -164,11 +171,14 @@ def train(model, train_loader, val_loader, epochs):
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        {'params': [p for n, p in param_optimizer if not any(
+            nd in n for nd in no_decay)], 'weight_decay': 0.01},
+        {'params': [p for n, p in param_optimizer if any(
+            nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
 
-    num_train_optimization_steps = int(epochs * len(train_loader) / accumulation_steps)
+    num_train_optimization_steps = int(
+        epochs * len(train_loader) / accumulation_steps)
     optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
                       correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
@@ -201,13 +211,17 @@ def train(model, train_loader, val_loader, epochs):
 
             avg_loss = np.round(np.mean(loss_list), 4)
 
-            tbar.set_description(f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
+            tbar.set_description(
+                f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
         y_val, y_pred = validate(model, val_loader)
-        val_df["pred"] = val_df.groupby(["id", "cell_type"])["rank"].rank(pct=True)
+        val_df["pred"] = val_df.groupby(["id", "cell_type"])[
+            "rank"].rank(pct=True)
         val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
-        y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
-        print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+        y_dummy = val_df.sort_values("pred").groupby('id')[
+            'cell_id'].apply(list)
+        print("Preds score", kendall_tau(
+            df_orders.loc[y_dummy.index], y_dummy))
 
     return model, y_pred
 
