@@ -8,6 +8,8 @@ from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
+from config import RANK_COUNT
+
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 stemmer = WordNetLemmatizer()
@@ -44,7 +46,7 @@ def preprocess_text(document):
 
 
 def preprocess_code(cell):
-    return str(cell).replace('\\n', '\n')
+    return str(cell).replace('\\n', '\n')[:200]
 
 
 def read_notebook(path):
@@ -91,6 +93,55 @@ def get_features(df):
         features[idx]['total_md'] = total_md
         features[idx]['codes'] = codes
     return features
+
+
+def get_features_class(df):
+    features = pd.DataFrame()
+    code_dict = {}
+
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for idx, sub_df in tqdm(df.groupby('id')):
+        code_dict[idx] = code_sub_df_all['cell_id'].to_list()
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        min_rank = code_sub_df_all['rank'].min()
+        total_md = mark_sub_df_all.shape[0]
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+                total_code = code_sub_df.shape[0]
+                codes = code_sub_df['cell_id'].to_list()
+                ranks = code_sub_df['rank'].values
+                rank = mark_sub_df_all.iloc[i]['rank']
+                if rank < min_rank:
+                    rank = 0
+                else:
+                    sub_ranks = rank - ranks
+                    sub_ranks = sub_ranks[sub_ranks > 0]
+                    if len(sub_ranks) == 0:
+                        rank = -1
+                    else:
+                        rank = np.argmin(sub_ranks)
+                        if rank > 20:
+                            rank = 21
+
+                feature = {
+                    'id': idx,
+                    'total_code': total_code,
+                    'total_md': total_md,
+                    'code_start': j,
+                    'code_end': j + len(codes),
+                    'mark': mark_sub_df_all.iloc[i]['cell_id'],
+                    'rank': rank
+                }
+
+                features = features.append(feature, ignore_index=True)
+
+    return features, code_dict
 
 
 def count_inversions(a):
