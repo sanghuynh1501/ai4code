@@ -1,4 +1,6 @@
 csv
 data
+data_dump
+json_data
 weights
 __pycache__

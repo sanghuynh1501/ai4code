@@ -1,4 +1,8 @@
+import csv
+import json
+import random
 import re
+import string
 from bisect import bisect
 
 import nltk
@@ -8,7 +12,7 @@ from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
-from config import RANK_COUNT
+from config import RANK_COUNT, RANKS
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')
@@ -95,14 +99,11 @@ def get_features(df):
     return features
 
 
-def get_features_class(df):
-    features = pd.DataFrame()
-    code_dict = {}
+def get_features_class(file_path, df):
 
     df = df.sort_values('rank').reset_index(drop=True)
 
     for idx, sub_df in tqdm(df.groupby('id')):
-        code_dict[idx] = code_sub_df_all['cell_id'].to_list()
 
         mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
         code_sub_df_all = sub_df[sub_df.cell_type == 'code']
@@ -116,6 +117,7 @@ def get_features_class(df):
                 total_code = code_sub_df.shape[0]
                 codes = code_sub_df['cell_id'].to_list()
                 ranks = code_sub_df['rank'].values
+                mark = mark_sub_df_all.iloc[i]['cell_id']
                 rank = mark_sub_df_all.iloc[i]['rank']
                 if rank < min_rank:
                     rank = 0
@@ -131,17 +133,20 @@ def get_features_class(df):
 
                 feature = {
                     'id': idx,
-                    'total_code': total_code,
-                    'total_md': total_md,
-                    'code_start': j,
-                    'code_end': j + len(codes),
-                    'mark': mark_sub_df_all.iloc[i]['cell_id'],
-                    'rank': rank
+                    'total_code': int(total_code),
+                    'total_md': int(total_md),
+                    'codes': codes,
+                    'mark': mark,
+                    'rank': int(rank)
                 }
 
-                features = features.append(feature, ignore_index=True)
+                code = ''.join(random.choice(string.ascii_lowercase)
+                               for _ in range(5))
 
-    return features, code_dict
+                feature_name = f'{mark}_{RANKS.index(rank)}_{code}.json'
+                with open(f'{file_path}/{feature_name}', 'w') as f:
+                    json.dump(feature, f)
+                f.close()
 
 
 def count_inversions(a):

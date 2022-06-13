@@ -1,3 +1,4 @@
+import csv
 import pickle
 
 import pandas as pd
@@ -6,7 +7,7 @@ from tqdm import tqdm
 
 from config import DATA_DIR
 from helper import (get_features_class, get_ranks, preprocess_code,
-                    preprocess_text, read_notebook)
+                    preprocess_text, read_notebook, write_json)
 
 paths_train = list((DATA_DIR / 'train').glob('*.json'))
 notebooks_train = [
@@ -64,21 +65,12 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-train_fts, train_code_dict = get_features_class(train_df)
-val_fts, val_code_dict = get_features_class(val_df)
+train_df.to_csv('data_dump/train_df.csv')
+val_df.to_csv('data_dump/val_df.csv')
 
-train_fts.to_csv('train_fts.csv')
-val_fts.to_csv('val_fts.csv')
-val_df.to_csv('val_df.csv')
-
-with open('train_code_dict.pkl', 'wb') as handle:
-    pickle.dump(train_code_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-handle.close()
-
-with open('val_code_dict.pkl', 'wb') as handle:
-    pickle.dump(val_code_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-handle.close()
-
-with open('dict_cellid_source.pkl', 'wb') as handle:
+with open('data_dump/dict_cellid_source.pkl', 'wb') as handle:
     pickle.dump(dict_cellid_source, handle, protocol=pickle.HIGHEST_PROTOCOL)
 handle.close()
+
+get_features_class('data_dump/json_train', train_df)
+get_features_class('data_dump/json_val', val_df)

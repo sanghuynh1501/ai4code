@@ -1,3 +1,5 @@
+import json
+
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
@@ -7,17 +9,21 @@ from config import BERT_MODEL_PATH, RANKS
 
 class MarkdownDataset(Dataset):
 
-    def __init__(self, dict_cellid_source, code_dict, total_max_len, md_max_len, fts):
+    def __init__(self, feature_names, dict_cellid_source, code_dict, total_max_len, md_max_len):
         super().__init__()
         self.dict_cellid_source = dict_cellid_source
         self.md_max_len = md_max_len
         self.code_dict = code_dict
         self.total_max_len = total_max_len  # maxlen allowed by model config
         self.tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_PATH)
-        self.fts = fts.reset_index(drop=True)
+        self.feature_names = feature_names
 
     def __getitem__(self, index):
-        row = self.fts.iloc[index]
+        file_path = self.feature_names[index]
+
+        f = open(file_path)
+        row = json.load(f)
+        f.close()
 
         inputs = self.tokenizer.encode_plus(
             self.dict_cellid_source[row['mark']],
@@ -69,4 +75,4 @@ class MarkdownDataset(Dataset):
         return ids, mask, fts, torch.LongTensor([label])
 
     def __len__(self):
-        return len(self.fts)
+        return len(self.feature_names)
