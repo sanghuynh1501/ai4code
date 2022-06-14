@@ -1,19 +1,19 @@
-import torch.nn.functional as F
-import torch.nn as nn
 import torch
-from config import BERT_MODEL_PATH, RANK_COUNT
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModel
+
+from config import BERT_MODEL_PATH, RANKS
 
 
 class MarkdownModel(nn.Module):
     def __init__(self):
         super(MarkdownModel, self).__init__()
         self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
-        self.top = nn.Linear(769, RANK_COUNT)
-        self.softmax = torch.nn.Softmax(dim=1)
+        self.top = nn.Linear(769, len(RANKS))
 
     def forward(self, ids, mask, fts):
         x = self.model(ids, mask)[0]
         x = torch.cat((x[:, 0, :], fts), 1)
-        x = self.softmax(self.top(x))
+        x = self.top(x)
         return x

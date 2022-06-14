@@ -99,8 +99,9 @@ def get_features(df):
     return features
 
 
-def get_features_class(file_path, df):
+def get_features_class(df):
 
+    features = {}
     df = df.sort_values('rank').reset_index(drop=True)
 
     for idx, sub_df in tqdm(df.groupby('id')):
@@ -110,15 +111,51 @@ def get_features_class(file_path, df):
 
         min_rank = code_sub_df_all['rank'].min()
         total_md = mark_sub_df_all.shape[0]
+        total_code = mark_sub_df_all.shape[0]
+
+        for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+            code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+            codes = code_sub_df['cell_id'].to_list()
+            ranks = code_sub_df['rank'].to_list()
+
+            feature = {
+                'total_code': int(total_code),
+                'total_md': int(total_md),
+                'codes': codes,
+                'ranks': ranks,
+                'min_rank': min_rank
+            }
+
+            if idx not in features:
+                features[idx] = [feature]
+            else:
+                features[idx].append(feature)
+
+    return features
+
+
+def get_features_val(df):
+
+    features = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for idx, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        min_rank = code_sub_df_all['rank'].min()
+        total_md = mark_sub_df_all.shape[0]
+        total_code = mark_sub_df_all.shape[0]
 
         for i in range(0, mark_sub_df_all.shape[0]):
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
-                total_code = code_sub_df.shape[0]
                 codes = code_sub_df['cell_id'].to_list()
                 ranks = code_sub_df['rank'].values
                 mark = mark_sub_df_all.iloc[i]['cell_id']
                 rank = mark_sub_df_all.iloc[i]['rank']
+
                 if rank < min_rank:
                     rank = 0
                 else:
@@ -132,7 +169,6 @@ def get_features_class(file_path, df):
                             rank = 21
 
                 feature = {
-                    'id': idx,
                     'total_code': int(total_code),
                     'total_md': int(total_md),
                     'codes': codes,
@@ -140,13 +176,9 @@ def get_features_class(file_path, df):
                     'rank': int(rank)
                 }
 
-                code = ''.join(random.choice(string.ascii_lowercase)
-                               for _ in range(5))
+                features.append(feature)
 
-                feature_name = f'{mark}_{RANKS.index(rank)}_{code}.json'
-                with open(f'{file_path}/{feature_name}', 'w') as f:
-                    json.dump(feature, f)
-                f.close()
+    return features
 
 
 def count_inversions(a):

@@ -1,4 +1,3 @@
-import csv
 import pickle
 
 import pandas as pd
@@ -7,7 +6,7 @@ from tqdm import tqdm
 
 from config import DATA_DIR
 from helper import (get_features_class, get_ranks, preprocess_code,
-                    preprocess_text, read_notebook, write_json)
+                    preprocess_text, read_notebook)
 
 paths_train = list((DATA_DIR / 'train').glob('*.json'))
 notebooks_train = [
@@ -72,5 +71,13 @@ with open('data_dump/dict_cellid_source.pkl', 'wb') as handle:
     pickle.dump(dict_cellid_source, handle, protocol=pickle.HIGHEST_PROTOCOL)
 handle.close()
 
-get_features_class('data_dump/json_train', train_df)
-get_features_class('data_dump/json_val', val_df)
+features_train = get_features_class(train_df)
+features_val = get_features_class(val_df)
+
+with open('data_dump/features_train.pkl', 'wb') as handle:
+    pickle.dump(features_train, handle, protocol=pickle.HIGHEST_PROTOCOL)
+handle.close()
+
+with open('data_dump/features_val.pkl', 'wb') as handle:
+    pickle.dump(features_val, handle, protocol=pickle.HIGHEST_PROTOCOL)
+handle.close()

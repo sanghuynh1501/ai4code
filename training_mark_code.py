@@ -7,10 +7,10 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
-from config import BS, CODE_MARK_PATH, DATA_DIR, NW, RANK_COUNT, RANKS
-from dataset import MarkdownDataset
-from helper import kendall_tau
 
+from config import BS, CODE_MARK_PATH, DATA_DIR, NW, RANK_COUNT, RANKS
+from dataset import MarkdownDataset, MarkdownDatasetTest
+from helper import get_features_val, kendall_tau
 from model import MarkdownModel
 
 device = 'cuda'
@@ -18,9 +18,7 @@ torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-train_fts = pd.read_csv('train_fts.csv')
-val_fts = pd.read_csv('val_fts.csv')
-val_df = pd.read_csv('val_df.csv')
+model = MarkdownModel().to(device)
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -28,16 +26,29 @@ df_orders = pd.read_csv(
     squeeze=True,
 ).str.split()
 
-with open('dict_cellid_source.pkl', 'rb') as f:
+train_df = pd.read_csv('../input/ai4code-dump/train_df.csv')
+val_df = pd.read_csv('../input/ai4code-dump/val_df.csv')
+
+train_df_mark = train_df[train_df["cell_type"]
+                         == "markdown"].reset_index(drop=True)
+
+with open('../input/ai4code-dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
 
-model = MarkdownModel().to(device)
+with open('../input/ai4code-dump/features_train.pkl', 'rb') as f:
+    train_fts = pickle.load(f)
+f.close()
 
-train_ds = MarkdownDataset(dict_cellid_source, md_max_len=64,
-                           total_max_len=512, fts=train_fts)
-val_ds = MarkdownDataset(dict_cellid_source, md_max_len=64,
-                         total_max_len=512, fts=val_fts)
+unique_ids = pd.unique(val_df['id'])
+ids = unique_ids[:1000]
+val_df = val_df[val_df['id'].isin(ids)]
+val_fts = get_features_val(val_df)
+
+train_ds = MarkdownDataset(train_df_mark, dict_cellid_source,
+                           md_max_len=64, total_max_len=512, fts=train_fts)
+val_ds = MarkdownDatasetTest(
+    dict_cellid_source, md_max_len=64, total_max_len=512, fts=val_fts)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
