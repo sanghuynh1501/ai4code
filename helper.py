@@ -1,8 +1,4 @@
-import csv
-import json
-import random
 import re
-import string
 from bisect import bisect
 
 import nltk
@@ -12,7 +8,7 @@ from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
-from config import RANK_COUNT, RANKS
+from config import RANK_COUNT
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')

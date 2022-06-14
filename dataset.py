@@ -1,11 +1,10 @@
-import math
+import random
+
 import numpy as np
 import torch
-import random
+from config import BERT_MODEL_PATH, RANKS
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
-
-from config import BERT_MODEL_PATH, RANKS
 
 
 class MarkdownDataset(Dataset):

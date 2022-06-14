@@ -19,6 +19,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 model = MarkdownModel().to(device)
+model.load_state_dict(torch.load(CODE_MARK_PATH))
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -26,17 +27,17 @@ df_orders = pd.read_csv(
     squeeze=True,
 ).str.split()
 
-train_df = pd.read_csv('../input/ai4code-dump/train_df.csv')
-val_df = pd.read_csv('../input/ai4code-dump/val_df.csv')
+train_df = pd.read_csv('data_dump/train_df.csv')
+val_df = pd.read_csv('data_dump/val_df.csv')
 
 train_df_mark = train_df[train_df["cell_type"]
                          == "markdown"].reset_index(drop=True)
 
-with open('../input/ai4code-dump/dict_cellid_source.pkl', 'rb') as f:
+with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
 
-with open('../input/ai4code-dump/features_train.pkl', 'rb') as f:
+with open('data_dump/features_train.pkl', 'rb') as f:
     train_fts = pickle.load(f)
 f.close()
 
@@ -52,7 +53,7 @@ val_ds = MarkdownDatasetTest(
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
-val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
+val_loader = DataLoader(val_ds, batch_size=BS * 5, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
 param_optimizer = list(model.named_parameters())
@@ -173,11 +174,11 @@ def train(model, train_loader, val_loader, epochs):
             tbar.set_description(
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
-            if idx % 5000 == 0 or idx == len(tbar) - 1:
-                label, y_pred = validate(model, val_loader)
-                cal_kendall_tau(val_df, y_pred)
-                torch.save(model.state_dict(), CODE_MARK_PATH)
-                model.train()
+            # if idx % 5000 == 0 or idx == len(tbar) - 1:
+            #     label, y_pred = validate(model, val_loader)
+            #     cal_kendall_tau(val_df, y_pred)
+            #     torch.save(model.state_dict(), CODE_MARK_PATH)
+            #     model.train()
 
 
 model = MarkdownModel()
