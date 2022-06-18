@@ -8,7 +8,7 @@ from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
-from config import RANK_COUNT
+from config import RANK_COUNT, RANKS
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')
@@ -63,38 +63,6 @@ def get_ranks(base, derived):
     return [base.index(d) for d in derived]
 
 
-def sample_cells(cells, n):
-    cells = [preprocess_code(cell) for cell in cells]
-    if n >= len(cells):
-        return [cell[:200] for cell in cells]
-    else:
-        results = []
-        step = len(cells) / n
-        idx = 0
-        while int(np.round(idx)) < len(cells):
-            results.append(cells[int(np.round(idx))])
-            idx += step
-        assert cells[0] in results
-        if cells[-1] not in results:
-            results[-1] = cells[-1]
-        return results
-
-
-def get_features(df):
-    features = dict()
-    df = df.sort_values('rank').reset_index(drop=True)
-    for idx, sub_df in tqdm(df.groupby('id')):
-        features[idx] = dict()
-        total_md = sub_df[sub_df.cell_type == 'markdown'].shape[0]
-        code_sub_df = sub_df[sub_df.cell_type == 'code']
-        total_code = code_sub_df.shape[0]
-        codes = sample_cells(code_sub_df.source.values, 20)
-        features[idx]['total_code'] = total_code
-        features[idx]['total_md'] = total_md
-        features[idx]['codes'] = codes
-    return features
-
-
 def get_features_class(df):
 
     features = {}
@@ -107,12 +75,13 @@ def get_features_class(df):
 
         min_rank = code_sub_df_all['rank'].min()
         total_md = mark_sub_df_all.shape[0]
-        total_code = mark_sub_df_all.shape[0]
 
         for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
             code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+
             codes = code_sub_df['cell_id'].to_list()
             ranks = code_sub_df['rank'].to_list()
+            total_code = code_sub_df.shape[0]
 
             feature = {
                 'total_code': int(total_code),
@@ -130,9 +99,14 @@ def get_features_class(df):
     return features
 
 
+def check_code_by_rank(rank, full_codes_ranks):
+    return rank in full_codes_ranks
+
+
 def get_features_val(df):
 
     features = []
+    labels = []
     df = df.sort_values('rank').reset_index(drop=True)
 
     for idx, sub_df in tqdm(df.groupby('id')):
@@ -141,28 +115,35 @@ def get_features_val(df):
         code_sub_df_all = sub_df[sub_df.cell_type == 'code']
 
         min_rank = code_sub_df_all['rank'].min()
+        full_code_rank = code_sub_df_all['rank'].to_list()
         total_md = mark_sub_df_all.shape[0]
-        total_code = mark_sub_df_all.shape[0]
 
         for i in range(0, mark_sub_df_all.shape[0]):
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+
                 codes = code_sub_df['cell_id'].to_list()
                 ranks = code_sub_df['rank'].values
+                total_code = code_sub_df.shape[0]
+
                 mark = mark_sub_df_all.iloc[i]['cell_id']
                 rank = mark_sub_df_all.iloc[i]['rank']
 
+                sub_ranks = []
                 if rank < min_rank:
                     rank = 0
                 else:
                     sub_ranks = rank - ranks
-                    sub_ranks = sub_ranks[sub_ranks > 0]
-                    if len(sub_ranks) == 0:
+                    sub_ranks_positive = sub_ranks[sub_ranks > 0]
+                    if len(sub_ranks_positive) == 0:
                         rank = -1
                     else:
-                        rank = np.argmin(sub_ranks)
-                        if rank > 20:
-                            rank = 21
+                        sub_ranks[sub_ranks < 0] = 100000
+                        rank = np.argmin(sub_ranks) + 1
+                        if rank == RANK_COUNT:
+                            for r in range(ranks[-1] + 1, mark_sub_df_all.iloc[i]['rank'], 1):
+                                if check_code_by_rank(r, full_code_rank):
+                                    rank = RANK_COUNT + 1
 
                 feature = {
                     'total_code': int(total_code),
@@ -173,8 +154,9 @@ def get_features_val(df):
                 }
 
                 features.append(feature)
+                labels.append(RANKS.index(int(rank)))
 
-    return features
+    return features, labels
 
 
 def count_inversions(a):
@@ -197,3 +179,52 @@ def kendall_tau(ground_truth, predictions):
         n = len(gt)
         total_2max += n * (n - 1)
     return 1 - 4 * total_inversions / total_2max
+
+
+def cal_kendall_tau(df, pred, df_orders):
+    index = 0
+    df = df.sort_values('rank').reset_index(drop=True)
+    df.loc[df['cell_type'] == 'code',
+           'pred'] = df[df.cell_type == 'code']['rank']
+
+    final_pred = {}
+
+    for idx, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                rank_index = RANKS[pred[index]]
+                if rank_index >= 0 and rank_index < RANK_COUNT + 1:
+                    code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+                    if rank_index == 0:
+                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                        final_pred[cell_id] = 0
+                    else:
+                        start_rank = 0
+                        rank_index -= 1
+                        if rank_index < len(code_sub_df):
+                            start_rank = code_sub_df.iloc[rank_index]['rank']
+
+                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                        final_pred[cell_id] = start_rank + 1
+                index += 1
+
+    pred = []
+    cell_ids = []
+    for cell_id in final_pred.keys():
+        cell_ids.append(cell_id)
+        pred.append(final_pred[cell_id])
+
+    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
+                                    'cell_id', 'markdown_pred'])
+    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
+
+    df.loc[df['cell_type'] == 'markdown',
+           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
+
+    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
+    y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+    print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))

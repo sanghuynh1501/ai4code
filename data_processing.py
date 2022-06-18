@@ -5,7 +5,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from tqdm import tqdm
 
 from config import DATA_DIR
-from helper import (get_features_class, get_ranks, preprocess_code,
+from helper import (get_ranks, preprocess_code,
                     preprocess_text, read_notebook)
 
 paths_train = list((DATA_DIR / 'train').glob('*.json'))
@@ -71,13 +71,13 @@ with open('data_dump/dict_cellid_source.pkl', 'wb') as handle:
     pickle.dump(dict_cellid_source, handle, protocol=pickle.HIGHEST_PROTOCOL)
 handle.close()
 
-features_train = get_features_class(train_df)
-features_val = get_features_class(val_df)
+# features_train = get_features_class(train_df)
+# features_val = get_features_class(val_df)
 
-with open('data_dump/features_train.pkl', 'wb') as handle:
-    pickle.dump(features_train, handle, protocol=pickle.HIGHEST_PROTOCOL)
-handle.close()
+# out_file = open('data_dump/features_train.json', 'w')
+# json.dump(features_train, out_file, indent=6)
+# out_file.close()
 
-with open('data_dump/features_val.pkl', 'wb') as handle:
-    pickle.dump(features_val, handle, protocol=pickle.HIGHEST_PROTOCOL)
-handle.close()
+# out_file = open('data_dump/features_val.json', 'w')
+# json.dump(features_val, out_file, indent=6)
+# out_file.close()

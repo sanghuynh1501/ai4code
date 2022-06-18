@@ -1,36 +1,28 @@
+import sys
+import json
+import pickle
 import numpy as np
 import pandas as pd
 import torch
+from matplotlib import pyplot as plt
+from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import AdamW, get_linear_schedule_with_warmup
+from config import BS, CLASS_WEIGHTS, CODE_MARK_PATH, DATA_DIR, EPOCH, NW, RANK_COUNT, RANKS, accumulation_steps
+from dataset import MarkdownDataset, MarkdownDatasetTest
+from helper import get_features_val, kendall_tau
+from torch.utils.data.dataloader import default_collate
+from losses import FocalLoss
 
-from config import BS, CODE_MARK_PATH, DATA_DIR, MAX_LEN, NW
-from dataset import MarkdownDataset, TestDataset
-from helper import (generate_data_test, generate_triplet, get_ranks, kendall_tau,
-                    preprocess_code, preprocess_text, read_data, read_notebook)
-from model import MarkdownModel, PairWiseModel
+from model import MarkdownModel
 
-device = 'cuda'
+device = 'cpu'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-
-model = MarkdownModel().to(device)
-model.load_state_dict(torch.load(CODE_MARK_PATH))
-model.eval()
-
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[:10]
-notebooks_train = [
-    read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
-]
-
-df = (
-    pd.concat(notebooks_train)
-    .set_index('id', append=True)
-    .swaplevel()
-    .sort_index(level='id', sort_remaining=False)
-)
+model = MarkdownModel()
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -38,64 +30,92 @@ df_orders = pd.read_csv(
     squeeze=True,
 ).str.split()
 
-df_orders_ = df_orders.to_frame().join(
-    df.reset_index('cell_id').groupby('id')['cell_id'].apply(list),
-    how='right',
-)
+val_df = pd.read_csv('data_dump/val_df.csv')
 
-ranks = {}
-for id_, cell_order, cell_id in df_orders_.itertuples():
-    ranks[id_] = {'cell_id': cell_id, 'rank': get_ranks(cell_order, cell_id)}
+with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
+    dict_cellid_source = pickle.load(f)
+f.close()
 
-df_ranks = (
-    pd.DataFrame
-    .from_dict(ranks, orient='index')
-    .rename_axis('id')
-    .apply(pd.Series.explode)
-    .set_index('cell_id', append=True)
-)
+unique_ids = pd.unique(val_df['id'])
+ids = unique_ids[:1000]
+val_df = val_df[val_df['id'].isin(ids)]
+val_fts = get_features_val(val_df)
 
-df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
+val_ds = MarkdownDatasetTest(
+    dict_cellid_source, md_max_len=64, total_max_len=512, fts=val_fts)
 
-df = df.reset_index().merge(
-    df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-
-df.source = df.source.apply(preprocess_text)
-
-data = generate_triplet(df, 'test')
-
-print('=============================================')
-print('data ', len(data))
-print('=============================================')
-
-dict_cellid_source = dict(zip(df['cell_id'].values, df['source'].values))
-
-val_data = MarkdownDataset(data, dict_cellid_source, MAX_LEN)
-
-val_loader = DataLoader(val_data, batch_size=BS * 2, shuffle=False, num_workers=NW,
+val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=0,
                         pin_memory=False, drop_last=False)
 
-with torch.no_grad():
+
+def cal_kendall_tau(df, pred):
+    index = 0
+    df = df.sort_values('rank').reset_index(drop=True)
+    df.loc[df['cell_type'] == 'code',
+           'pred'] = df[df.cell_type == 'code']['rank']
+
+    final_pred = {}
+
+    for idx, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                rank_index = RANKS[pred[index]]
+                if rank_index >= 0 and rank_index < RANK_COUNT + 1:
+                    code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
+                    if rank_index == 0:
+                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                        final_pred[cell_id] = 0
+                    else:
+                        start_rank = 0
+                        rank_index -= 1
+                        if rank_index < len(code_sub_df):
+                            start_rank = code_sub_df.iloc[rank_index]['rank']
+
+                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                        final_pred[cell_id] = start_rank + 1
+                index += 1
+
+    pred = []
+    cell_ids = []
+    for cell_id in final_pred.keys():
+        cell_ids.append(cell_id)
+        pred.append(final_pred[cell_id])
+
+    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
+                                    'cell_id', 'markdown_pred'])
+    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
+
+    df.loc[df['cell_type'] == 'markdown',
+           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
+
+    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
+    y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+    print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+
+
+def validate(model, val_loader):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
     preds = []
-    with tqdm(total=len(val_data)) as pbar:
-        for data in val_loader:
+    labels = []
 
-            inputs, target = read_data(data)
+    with torch.no_grad():
+        for idx, (ids, mask, fts, code_lens, target) in enumerate(tbar):
+            # with torch.cuda.amp.autocast():
+            #     pred = model(ids.to(device), mask.to(device),
+            #                  fts.to(device), code_lens.to(device))
+            # pred = torch.argmax(pred, dim=1)
+            # preds.append(pred.detach().cpu().numpy().ravel())
+            labels.append(target.detach().cpu().numpy().ravel())
 
-            pred = model(inputs[0], inputs[1])
+    return np.concatenate(labels)
 
-            preds += pred.detach().cpu().numpy().ravel().tolist()
 
-            pbar.update(len(inputs[0]))
-
-for id, df_tmp in tqdm(df.groupby('id')):
-
-    df_tmp_markdown = df_tmp[df_tmp['cell_type'] == 'markdown']
-    df_tmp_code = df_tmp[df_tmp['cell_type'] == 'code']
-
-    idx = 0
-    for cell_id, rank in df_tmp_markdown[['cell_id', 'rank']].values:
-        for cid, crank in df_tmp_code[['cell_id', 'rank']].values:
-            if crank != rank + 1:
-                print(cell_id, cid, rank, crank, preds[idx])
-            idx += 1
+label = validate(model, val_loader)
+cal_kendall_tau(val_df, label)
