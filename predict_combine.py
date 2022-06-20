@@ -13,7 +13,6 @@ from config import BS, CLASS_WEIGHTS, CODE_MARK_PATH, DATA_DIR, EPOCH, NW, RANK_
 from dataset import MarkdownDataset, MarkdownDatasetTest
 from helper import get_features_val, kendall_tau
 from torch.utils.data.dataloader import default_collate
-from losses import FocalLoss
 
 from model import MarkdownModel
 
@@ -64,7 +63,7 @@ def cal_kendall_tau(df, pred):
         for i in range(0, mark_sub_df_all.shape[0]):
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 rank_index = RANKS[pred[index]]
-                if rank_index >= 0 and rank_index < RANK_COUNT + 1:
+                if rank_index >= 0:
                     code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
                     if rank_index == 0:
                         cell_id = mark_sub_df_all.iloc[i]['cell_id']

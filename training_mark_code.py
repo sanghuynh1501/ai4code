@@ -35,6 +35,10 @@ with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
 
+unique_ids = pd.unique(train_df['id'])
+ids = unique_ids[:10000]
+train_df = train_df[train_df['id'].isin(ids)]
+
 unique_ids = pd.unique(val_df['id'])
 ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]

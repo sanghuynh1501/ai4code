@@ -107,6 +107,7 @@ def get_features_val(df):
 
     features = []
     labels = []
+    relatives = []
     df = df.sort_values('rank').reset_index(drop=True)
 
     for idx, sub_df in tqdm(df.groupby('id')):
@@ -128,6 +129,7 @@ def get_features_val(df):
 
                 mark = mark_sub_df_all.iloc[i]['cell_id']
                 rank = mark_sub_df_all.iloc[i]['rank']
+                relative = 1
 
                 sub_ranks = []
                 if rank < min_rank:
@@ -137,26 +139,30 @@ def get_features_val(df):
                     sub_ranks_positive = sub_ranks[sub_ranks > 0]
                     if len(sub_ranks_positive) == 0:
                         rank = -1
+                        relative = 0
                     else:
                         sub_ranks[sub_ranks < 0] = 100000
                         rank = np.argmin(sub_ranks) + 1
                         if rank == RANK_COUNT:
                             for r in range(ranks[-1] + 1, mark_sub_df_all.iloc[i]['rank'], 1):
                                 if check_code_by_rank(r, full_code_rank):
-                                    rank = RANK_COUNT + 1
+                                    rank = -1
+                                    relative = 0
 
                 feature = {
                     'total_code': int(total_code),
                     'total_md': int(total_md),
                     'codes': codes,
                     'mark': mark,
-                    'rank': int(rank)
+                    'rank': int(rank),
+                    'relative': relative
                 }
 
                 features.append(feature)
                 labels.append(RANKS.index(int(rank)))
+                relatives.append(relative)
 
-    return features, labels
+    return features, labels, relatives
 
 
 def count_inversions(a):
@@ -197,7 +203,7 @@ def cal_kendall_tau(df, pred, df_orders):
         for i in range(0, mark_sub_df_all.shape[0]):
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 rank_index = RANKS[pred[index]]
-                if rank_index >= 0 and rank_index < RANK_COUNT + 1:
+                if rank_index >= 0:
                     code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
                     if rank_index == 0:
                         cell_id = mark_sub_df_all.iloc[i]['cell_id']
