@@ -1,10 +1,12 @@
 import re
 from bisect import bisect
+import sys
 
 import nltk
 import numpy as np
 import pandas as pd
 from nltk.stem import WordNetLemmatizer
+import torch
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
@@ -14,6 +16,10 @@ nltk.download('wordnet')
 nltk.download('omw-1.4')
 stemmer = WordNetLemmatizer()
 stopwords = set(STOPWORDS)
+
+
+def sigmoid(x):
+    return 1/(1 + np.exp(-x))
 
 
 def preprocess_text(document):
@@ -103,7 +109,7 @@ def check_code_by_rank(rank, full_codes_ranks):
     return rank in full_codes_ranks
 
 
-def get_features_val(df):
+def get_features_val(df, mode='train'):
 
     features = []
     labels = []
@@ -114,6 +120,7 @@ def get_features_val(df):
 
         mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
         code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+        total_code_len = len(code_sub_df_all)
 
         min_rank = code_sub_df_all['rank'].min()
         full_code_rank = code_sub_df_all['rank'].to_list()
@@ -149,18 +156,49 @@ def get_features_val(df):
                                     rank = -1
                                     relative = 0
 
-                feature = {
-                    'total_code': int(total_code),
-                    'total_md': int(total_md),
-                    'codes': codes,
-                    'mark': mark,
-                    'rank': int(rank),
-                    'relative': relative
-                }
+                if mode == 'train':
+                    if rank != -1:
+                        feature = {
+                            'total_code': int(total_code),
+                            'total_md': int(total_md),
+                            'codes': codes,
+                            'mark': mark,
+                            'rank': int(rank),
+                            'relative': relative,
+                            'total_code_len': total_code_len
+                        }
 
-                features.append(feature)
-                labels.append(RANKS.index(int(rank)))
-                relatives.append(relative)
+                        features.append(feature)
+                        labels.append(RANKS.index(int(rank)))
+
+                        relatives.append(relative)
+                elif mode == 'sigmoid':
+                    if total_code_len > RANK_COUNT:
+                        feature = {
+                            'total_code': int(total_code),
+                            'total_md': int(total_md),
+                            'codes': codes,
+                            'mark': mark,
+                            'rank': int(rank) if rank != -1 else 0,
+                            'relative': relative,
+                            'total_code_len': total_code_len
+                        }
+
+                        features.append(feature)
+                        relatives.append(relative)
+                else:
+                    feature = {
+                        'total_code': int(total_code),
+                        'total_md': int(total_md),
+                        'codes': codes,
+                        'mark': mark,
+                        'rank': int(rank) if rank != -1 else 0,
+                        'relative': relative,
+                        'total_code_len': total_code_len
+                    }
+
+                    features.append(feature)
+                    relatives.append(relative)
 
     return features, labels, relatives
 
@@ -187,7 +225,7 @@ def kendall_tau(ground_truth, predictions):
     return 1 - 4 * total_inversions / total_2max
 
 
-def cal_kendall_tau(df, pred, df_orders):
+def cal_kendall_tau(df, pred, relative, df_orders):
     index = 0
     df = df.sort_values('rank').reset_index(drop=True)
     df.loc[df['cell_type'] == 'code',
@@ -195,28 +233,35 @@ def cal_kendall_tau(df, pred, df_orders):
 
     final_pred = {}
 
-    for idx, sub_df in tqdm(df.groupby('id')):
+    for _, sub_df in tqdm(df.groupby('id')):
 
         mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
         code_sub_df_all = sub_df[sub_df.cell_type == 'code']
 
         for i in range(0, mark_sub_df_all.shape[0]):
+            max_score = 0
+            max_index = 0
+            max_j = 0
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
-                rank_index = RANKS[pred[index]]
-                if rank_index >= 0:
-                    code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
-                    if rank_index == 0:
-                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
-                        final_pred[cell_id] = 0
-                    else:
-                        start_rank = 0
-                        rank_index -= 1
-                        if rank_index < len(code_sub_df):
-                            start_rank = code_sub_df.iloc[rank_index]['rank']
-
-                        cell_id = mark_sub_df_all.iloc[i]['cell_id']
-                        final_pred[cell_id] = start_rank + 1
+                if relative[index] >= max_score:
+                    max_score = relative[index]
+                    max_index = index
+                    max_j = j
                 index += 1
+
+            rank_index = RANKS[pred[max_index]]
+            code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
+            if rank_index == 0:
+                cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                final_pred[cell_id] = 0
+            else:
+                start_rank = 0
+                rank_index -= 1
+                if rank_index < len(code_sub_df):
+                    start_rank = code_sub_df.iloc[rank_index]['rank']
+
+                cell_id = mark_sub_df_all.iloc[i]['cell_id']
+                final_pred[cell_id] = start_rank + 1
 
     pred = []
     cell_ids = []
@@ -234,3 +279,53 @@ def cal_kendall_tau(df, pred, df_orders):
     df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
     y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
     print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+
+
+def sigmoid_validate(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    total = 0
+    total_true = 0
+    relatives = []
+
+    with torch.no_grad():
+        for idx, (ids, mask, fts, code_lens, _, target, total_code_lens) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device),
+                             fts.to(device), code_lens.to(device))
+
+            code_lens = (total_code_lens.detach().cpu().numpy().ravel()
+                         <= RANK_COUNT)
+            pred = pred.detach().cpu().numpy().ravel()
+            # pred = (sigmoid(pred) >= 0.5)
+            # pred = (pred | code_lens).astype(np.int8)
+            pred = pred + code_lens
+            pred = np.clip(pred, 0, 1)
+            relatives += pred.tolist()
+            target = target.detach().cpu().numpy().ravel()
+            total += len(target)
+            total_true += np.sum((pred == target).astype(np.int8))
+
+    return total_true / total, relatives
+
+
+def validate(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    preds = []
+    targets = []
+
+    with torch.no_grad():
+        for idx, (ids, mask, fts, code_lens, target, _, _) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device),
+                             fts.to(device), code_lens.to(device))
+            pred = torch.argmax(pred, dim=1)
+            preds.append(pred.detach().cpu().numpy().ravel())
+            targets.append(target.detach().cpu().numpy().ravel())
+
+    return np.concatenate(preds), np.concatenate(targets)

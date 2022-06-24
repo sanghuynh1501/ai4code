@@ -8,11 +8,11 @@ from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import BS, DATA_DIR, NW
+from config import BS, DATA_DIR, NW, SIGMOID_PATH
 from dataset import MarkdownDataset
 from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
                     read_notebook)
-from model import MarkdownModel
+from model import MarkdownModel, SigMoidModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
@@ -20,6 +20,9 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 model = MarkdownModel().to(device)
+model_sigmoid = SigMoidModel().to(device)
+model_sigmoid.load_state_dict(torch.load(SIGMOID_PATH))
+model_sigmoid = model.cuda()
 
 paths_train = list((DATA_DIR / 'train').glob('*.json'))[:1000]
 notebooks_train = [

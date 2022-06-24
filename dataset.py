@@ -124,11 +124,13 @@ class SigMoidDataset(Dataset):
                 (self.total_max_len - len(mask))
         mask = torch.LongTensor(mask)
 
-        label = row['relative']
+        label = RANKS.index(row['rank'])
+        relative = row['relative']
+        total_code_len = row['total_code_len']
 
         assert len(ids) == self.total_max_len
 
-        return ids, mask, fts, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.FloatTensor([label])
+        return ids, mask, fts, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.LongTensor([label]), torch.FloatTensor([relative]), torch.FloatTensor([total_code_len])
 
     def __len__(self):
         return len(self.fts)
