@@ -21,7 +21,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 model = MarkdownModel()
-# model.load_state_dict(torch.load(CODE_MARK_PATH))
+model.load_state_dict(torch.load(CODE_MARK_PATH))
 model = model.cuda()
 
 model_sigmoid = SigMoidModel().to(device)
@@ -41,7 +41,7 @@ with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
 f.close()
 
 unique_ids = pd.unique(train_df['id'])
-ids = unique_ids[:10000]
+ids = unique_ids[:100000]
 train_df = train_df[train_df['id'].isin(ids)]
 
 unique_ids = pd.unique(val_df['id'])
@@ -125,7 +125,8 @@ def train(model, train_loader, val_loader, epochs):
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                y_pred = validate(model, val_loader, device)
+                y_pred, _, acc = validate(model, val_loader, device)
+                print('acc ', acc)
                 cal_kendall_tau(val_df, y_pred, relative, df_orders)
                 torch.save(model.state_dict(), CODE_MARK_PATH)
                 model.train()

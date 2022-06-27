@@ -1,12 +1,13 @@
 import re
-from bisect import bisect
 import sys
+from bisect import bisect
 
 import nltk
 import numpy as np
 import pandas as pd
-from nltk.stem import WordNetLemmatizer
 import torch
+from nltk.stem import WordNetLemmatizer
+from sklearn.metrics import accuracy_score
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
@@ -299,9 +300,9 @@ def sigmoid_validate(model, val_loader, device):
             code_lens = (total_code_lens.detach().cpu().numpy().ravel()
                          <= RANK_COUNT)
             pred = pred.detach().cpu().numpy().ravel()
-            # pred = (sigmoid(pred) >= 0.5)
-            # pred = (pred | code_lens).astype(np.int8)
-            pred = pred + code_lens
+            pred = (sigmoid(pred) >= 0.5)
+            pred = (pred | code_lens).astype(np.int8)
+            # pred = pred + code_lens
             pred = np.clip(pred, 0, 1)
             relatives += pred.tolist()
             target = target.detach().cpu().numpy().ravel()
@@ -318,14 +319,18 @@ def validate(model, val_loader, device):
 
     preds = []
     targets = []
+    code_lens = []
 
     with torch.no_grad():
-        for idx, (ids, mask, fts, code_lens, target, _, _) in enumerate(tbar):
+        for idx, (ids, mask, fts, code_len, target, _, total_code_len) in enumerate(tbar):
             with torch.cuda.amp.autocast():
                 pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_lens.to(device))
+                             fts.to(device), code_len.to(device))
             pred = torch.argmax(pred, dim=1)
             preds.append(pred.detach().cpu().numpy().ravel())
             targets.append(target.detach().cpu().numpy().ravel())
+            code_lens.append(total_code_len.detach().cpu().numpy().ravel())
 
-    return np.concatenate(preds), np.concatenate(targets)
+    preds, targets, code_lens = np.concatenate(preds), np.concatenate(targets), np.concatenate(code_lens)
+    acc_index = np.where(code_lens <= RANK_COUNT)
+    return preds, targets, accuracy_score(targets[acc_index], preds[acc_index])

@@ -15,4 +15,4 @@ EPOCH = 5
 BS = 2
 NW = 1
 RANKS = [i for i in range(0, RANK_COUNT + 1, 1)]
-accumulation_steps = 16
+accumulation_steps = 32

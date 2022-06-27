@@ -21,7 +21,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 model = SigMoidModel()
-# model.load_state_dict(torch.load(SIGMOID_PATH))
+model.load_state_dict(torch.load(SIGMOID_PATH))
 model = model.cuda()
 
 model_mark = MarkdownModel()
