@@ -45,22 +45,22 @@ class MarkdownDataset(Dataset):
         for x in code_inputs['input_ids']:
             ids.extend(x[:-1])
         ids = ids[:self.total_max_len]
-        if len(ids) > 512:
+        if len(ids) > int(self.total_max_len / 2):
             ids = ids[:self.total_max_len:2]
-        if len(ids) != self.total_max_len:
+        if len(ids) != int(self.total_max_len / 2):
             ids = ids + [self.tokenizer.pad_token_id, ] * \
-                (self.total_max_len - len(ids))
+                (int(self.total_max_len / 2) - len(ids))
         ids = torch.LongTensor(ids)
 
         mask = inputs['attention_mask']
         for x in code_inputs['attention_mask']:
             mask.extend(x[:-1])
         mask = mask[:self.total_max_len]
-        if len(mask) > 512:
+        if len(mask) > int(self.total_max_len / 2):
             mask = mask[:self.total_max_len:2]
-        if len(mask) != self.total_max_len:
+        if len(mask) != int(self.total_max_len / 2):
             mask = mask + [self.tokenizer.pad_token_id, ] * \
-                (self.total_max_len - len(mask))
+                (int(self.total_max_len / 2) - len(mask))
         mask = torch.LongTensor(mask)
 
         label = row['pct_rank']
@@ -69,7 +69,7 @@ class MarkdownDataset(Dataset):
         loss_mask[:len(codes) + 1] = 0
         loss_mask = loss_mask.type(torch.ByteTensor)
 
-        assert len(ids) == self.total_max_len
+        assert len(ids) == int(self.total_max_len / 2)
 
         return ids, mask, fts, loss_mask, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.FloatTensor([label])
 

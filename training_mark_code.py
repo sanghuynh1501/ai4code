@@ -41,12 +41,12 @@ with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
 f.close()
 
 unique_ids = pd.unique(train_df['id'])
-ids = unique_ids[:100]
+ids = unique_ids[:100000]
 train_df = train_df[train_df['id'].isin(ids)]
 train_df["pct_rank"] = train_df["rank"] / train_df.groupby("id")["cell_id"].transform("count")
 
 unique_ids = pd.unique(val_df['id'])
-ids = unique_ids[:100]
+ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]
 val_df["pct_rank"] = val_df["rank"] / val_df.groupby("id")["cell_id"].transform("count")
 

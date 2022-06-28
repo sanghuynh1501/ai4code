@@ -12,7 +12,6 @@ class MarkdownModel(nn.Module):
         self.top = nn.Linear(770, 1)
 
     def forward(self, ids, mask, fts, code_lens, loss_mask):
-        print(ids.shape, mask.shape)
         x = self.model(ids, mask)[0]
         x = torch.cat((x[:, 0, :], fts, code_lens), 1)
 
