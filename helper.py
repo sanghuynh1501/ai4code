@@ -165,6 +165,7 @@ def get_features_val(df, mode='train'):
                             'codes': codes,
                             'mark': mark,
                             'rank': int(rank),
+                            'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
                             'relative': relative,
                             'total_code_len': total_code_len
                         }
@@ -181,6 +182,7 @@ def get_features_val(df, mode='train'):
                             'codes': codes,
                             'mark': mark,
                             'rank': int(rank) if rank != -1 else 0,
+                            'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
                             'relative': relative,
                             'total_code_len': total_code_len
                         }
@@ -194,6 +196,7 @@ def get_features_val(df, mode='train'):
                         'codes': codes,
                         'mark': mark,
                         'rank': int(rank) if rank != -1 else 0,
+                        'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
                         'relative': relative,
                         'total_code_len': total_code_len
                     }
@@ -230,7 +233,7 @@ def cal_kendall_tau(df, pred, relative, df_orders):
     index = 0
     df = df.sort_values('rank').reset_index(drop=True)
     df.loc[df['cell_type'] == 'code',
-           'pred'] = df[df.cell_type == 'code']['rank']
+           'pred'] = df[df.cell_type == 'code']['pct_rank']
 
     final_pred = {}
 
@@ -250,19 +253,19 @@ def cal_kendall_tau(df, pred, relative, df_orders):
                     max_j = j
                 index += 1
 
-            rank_index = RANKS[pred[max_index]]
-            code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
-            if rank_index == 0:
-                cell_id = mark_sub_df_all.iloc[i]['cell_id']
-                final_pred[cell_id] = 0
-            else:
-                start_rank = 0
-                rank_index -= 1
-                if rank_index < len(code_sub_df):
-                    start_rank = code_sub_df.iloc[rank_index]['rank']
+            # rank_index = RANKS[pred[max_index]]
+            # code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
+            # if rank_index == 0:
+            #     cell_id = mark_sub_df_all.iloc[i]['cell_id']
+            #     final_pred[cell_id] = 0
+            # else:
+            #     start_rank = 0
+            #     rank_index -= 1
+            #     if rank_index < len(code_sub_df):
+            #         start_rank = code_sub_df.iloc[rank_index]['rank']
 
-                cell_id = mark_sub_df_all.iloc[i]['cell_id']
-                final_pred[cell_id] = start_rank + 1
+            cell_id = mark_sub_df_all.iloc[i]['cell_id']
+            final_pred[cell_id] = pred[max_index]
 
     pred = []
     cell_ids = []
@@ -292,7 +295,7 @@ def sigmoid_validate(model, val_loader, device):
     relatives = []
 
     with torch.no_grad():
-        for idx, (ids, mask, fts, code_lens, _, target, total_code_lens) in enumerate(tbar):
+        for idx, (ids, mask, fts, _, code_lens, _, target, total_code_lens) in enumerate(tbar):
             with torch.cuda.amp.autocast():
                 pred = model(ids.to(device), mask.to(device),
                              fts.to(device), code_lens.to(device))
@@ -322,15 +325,17 @@ def validate(model, val_loader, device):
     code_lens = []
 
     with torch.no_grad():
-        for idx, (ids, mask, fts, code_len, target, _, total_code_len) in enumerate(tbar):
+        for idx, (ids, mask, fts, loss_mask, code_len, target, _, total_code_len) in enumerate(tbar):
             with torch.cuda.amp.autocast():
                 pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_len.to(device))
-            pred = torch.argmax(pred, dim=1)
+                             fts.to(device), code_len.to(device), loss_mask.to(device))
+            # pred = torch.argmax(pred, dim=1)
             preds.append(pred.detach().cpu().numpy().ravel())
             targets.append(target.detach().cpu().numpy().ravel())
             code_lens.append(total_code_len.detach().cpu().numpy().ravel())
 
-    preds, targets, code_lens = np.concatenate(preds), np.concatenate(targets), np.concatenate(code_lens)
+    preds, targets, code_lens = np.concatenate(
+        preds), np.concatenate(targets), np.concatenate(code_lens)
     acc_index = np.where(code_lens <= RANK_COUNT)
-    return preds, targets, accuracy_score(targets[acc_index], preds[acc_index])
+    return preds, targets, 0
+    # accuracy_score(targets[acc_index], preds[acc_index])

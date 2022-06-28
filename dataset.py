@@ -1,5 +1,5 @@
 import torch
-from config import BERT_MODEL_PATH, RANK_COUNT, RANKS
+from config import BERT_MODEL_PATH, CODE_MAX_LEN, RANK_COUNT, RANKS
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
@@ -30,7 +30,7 @@ class MarkdownDataset(Dataset):
         code_inputs = self.tokenizer.batch_encode_plus(
             [str(self.dict_cellid_source[x]) for x in codes],
             add_special_tokens=True,
-            max_length=23,
+            max_length=CODE_MAX_LEN,
             padding='max_length',
             truncation=True
         )
@@ -59,11 +59,15 @@ class MarkdownDataset(Dataset):
                 (self.total_max_len - len(mask))
         mask = torch.LongTensor(mask)
 
-        label = RANKS.index(row['rank'])
+        label = row['pct_rank']
+
+        loss_mask = torch.ones(RANK_COUNT + 1,)
+        loss_mask[:len(codes) + 1] = 0
+        loss_mask = loss_mask.type(torch.ByteTensor)
 
         assert len(ids) == self.total_max_len
 
-        return ids, mask, fts, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.LongTensor([label])
+        return ids, mask, fts, loss_mask, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.FloatTensor([label])
 
     def __len__(self):
         return len(self.fts)
@@ -95,7 +99,7 @@ class SigMoidDataset(Dataset):
         code_inputs = self.tokenizer.batch_encode_plus(
             [str(self.dict_cellid_source[x]) for x in codes],
             add_special_tokens=True,
-            max_length=23,
+            max_length=CODE_MAX_LEN,
             padding='max_length',
             truncation=True
         )
@@ -124,13 +128,17 @@ class SigMoidDataset(Dataset):
                 (self.total_max_len - len(mask))
         mask = torch.LongTensor(mask)
 
-        label = RANKS.index(row['rank'])
+        label = row['pct_rank']
         relative = row['relative']
         total_code_len = row['total_code_len']
 
+        loss_mask = torch.ones(RANK_COUNT + 1,)
+        loss_mask[:len(codes) + 1] = 0
+        loss_mask = loss_mask.type(torch.ByteTensor)
+
         assert len(ids) == self.total_max_len
 
-        return ids, mask, fts, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.LongTensor([label]), torch.FloatTensor([relative]), torch.FloatTensor([total_code_len])
+        return ids, mask, fts, loss_mask, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.FloatTensor([label]), torch.FloatTensor([relative]), torch.FloatTensor([total_code_len])
 
     def __len__(self):
         return len(self.fts)

@@ -9,13 +9,16 @@ class MarkdownModel(nn.Module):
     def __init__(self):
         super(MarkdownModel, self).__init__()
         self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
-        self.top = nn.Linear(770, len(RANKS))
-        self.solfmax = nn.LogSoftmax(dim=1)
+        self.top = nn.Linear(770, 1)
 
-    def forward(self, ids, mask, fts, code_lens):
+    def forward(self, ids, mask, fts, code_lens, loss_mask):
+        print(ids.shape, mask.shape)
         x = self.model(ids, mask)[0]
         x = torch.cat((x[:, 0, :], fts, code_lens), 1)
-        x = self.solfmax(self.top(x))
+
+        x = self.top(x)
+        x = torch.sigmoid(x)
+
         return x
 
 
