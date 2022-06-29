@@ -28,7 +28,7 @@ class MarkdownDataset(Dataset):
         )
         codes = row['codes']
         code_inputs = self.tokenizer.batch_encode_plus(
-            [str(self.dict_cellid_source[x]) for x in codes],
+            [str(self.dict_cellid_source[x]) for x in codes][:self.total_max_len:2],
             add_special_tokens=True,
             max_length=CODE_MAX_LEN,
             padding='max_length',
@@ -44,9 +44,9 @@ class MarkdownDataset(Dataset):
         ids = inputs['input_ids']
         for x in code_inputs['input_ids']:
             ids.extend(x[:-1])
-        ids = ids[:self.total_max_len]
-        if len(ids) > int(self.total_max_len / 2):
-            ids = ids[:self.total_max_len:2]
+        ids = ids[:int(self.total_max_len / 2)]
+        # if len(ids) > int(self.total_max_len / 2):
+        #     ids = ids[:self.total_max_len:2]
         if len(ids) != int(self.total_max_len / 2):
             ids = ids + [self.tokenizer.pad_token_id, ] * \
                 (int(self.total_max_len / 2) - len(ids))
@@ -55,9 +55,9 @@ class MarkdownDataset(Dataset):
         mask = inputs['attention_mask']
         for x in code_inputs['attention_mask']:
             mask.extend(x[:-1])
-        mask = mask[:self.total_max_len]
-        if len(mask) > int(self.total_max_len / 2):
-            mask = mask[:self.total_max_len:2]
+        mask = mask[:int(self.total_max_len / 2)]
+        # if len(mask) > int(self.total_max_len / 2):
+        #     mask = mask[:self.total_max_len:2]
         if len(mask) != int(self.total_max_len / 2):
             mask = mask + [self.tokenizer.pad_token_id, ] * \
                 (int(self.total_max_len / 2) - len(mask))
