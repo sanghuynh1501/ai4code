@@ -21,6 +21,20 @@ class MarkdownModel(nn.Module):
         return x
 
 
+class MarkdownOnlyModel(nn.Module):
+    def __init__(self):
+        super(MarkdownOnlyModel, self).__init__()
+        self.distill_bert = AutoModel.from_pretrained(BERT_MODEL_PATH)
+        self.top = nn.Linear(768, 1)
+
+    def forward(self, ids, mask):
+        x = self.distill_bert(ids, mask)[0]
+        x = self.top(x[:, 0, :])
+        x = torch.sigmoid(x)
+
+        return x
+
+
 class SigMoidModel(nn.Module):
     def __init__(self):
         super(SigMoidModel, self).__init__()

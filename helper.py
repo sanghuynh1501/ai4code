@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
-from config import RANK_COUNT, RANKS
+from config import LABELS, RANK_COUNT, RANKS
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')
@@ -207,6 +207,29 @@ def get_features_val(df, mode='train'):
     return features, labels, relatives
 
 
+def get_features_mark(df, mode='train'):
+
+    features = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for _, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            mark = mark_sub_df_all.iloc[i]['cell_id']
+            pct_rank = mark_sub_df_all.iloc[i]['pct_rank']
+
+            feature = {
+                'mark': mark,
+                'pct_rank': pct_rank
+            }
+
+            features.append(feature)
+
+    return features
+
+
 def count_inversions(a):
     inversions = 0
     sorted_so_far = []
@@ -229,7 +252,7 @@ def kendall_tau(ground_truth, predictions):
     return 1 - 4 * total_inversions / total_2max
 
 
-def cal_kendall_tau(df, pred, relative, df_orders):
+def cal_kendall_tau(df, pred, mark_dict, relative, df_orders):
     index = 0
     df = df.sort_values('rank').reset_index(drop=True)
     df.loc[df['cell_type'] == 'code',
@@ -245,12 +268,12 @@ def cal_kendall_tau(df, pred, relative, df_orders):
         for i in range(0, mark_sub_df_all.shape[0]):
             max_score = 0
             max_index = 0
-            max_j = 0
+            # max_j = 0
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 if relative[index] >= max_score:
                     max_score = relative[index]
                     max_index = index
-                    max_j = j
+                    # max_j = j
                 index += 1
 
             # rank_index = RANKS[pred[max_index]]
@@ -263,9 +286,11 @@ def cal_kendall_tau(df, pred, relative, df_orders):
             #     rank_index -= 1
             #     if rank_index < len(code_sub_df):
             #         start_rank = code_sub_df.iloc[rank_index]['rank']
-
             cell_id = mark_sub_df_all.iloc[i]['cell_id']
-            final_pred[cell_id] = pred[max_index]
+            if max_score == 0:
+                final_pred[cell_id] = mark_dict[cell_id]
+            else:
+                final_pred[cell_id] = pred[max_index]
 
     pred = []
     cell_ids = []
@@ -315,6 +340,49 @@ def sigmoid_validate(model, val_loader, device):
     return total_true / total, relatives
 
 
+def sigmoid_validate_detail(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    zero_total = 0
+    one_total = 0
+    total_zero_true = 0
+    total_one_true = 0
+
+    with torch.no_grad():
+        for idx, (ids, mask, fts, _, code_lens, _, target, total_code_lens) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device),
+                             fts.to(device), code_lens.to(device))
+
+            code_lens = (total_code_lens.detach().cpu().numpy().ravel()
+                         <= RANK_COUNT)
+            pred = pred.detach().cpu().numpy().ravel()
+            pred = (sigmoid(pred) >= 0.5)
+            pred = (pred | code_lens).astype(np.int8)
+            pred = np.clip(pred, 0, 1)
+            target = target.detach().cpu().numpy().ravel()
+
+            zero_indexes = np.where(np.any(target == 0))
+            one_indexes = np.where(np.any(target == 1))
+
+            zero_target = target[zero_indexes]
+            one_target = target[one_indexes]
+
+            zero_pred = pred[zero_indexes]
+            one_pred = pred[one_indexes]
+
+            zero_total += len(zero_target)
+            one_total += len(one_target)
+
+            total_zero_true += np.sum((zero_pred ==
+                                      zero_target).astype(np.int8))
+            total_one_true += np.sum((one_pred == one_target).astype(np.int8))
+
+    return total_zero_true / zero_total, total_one_true / one_total
+
+
 def validate(model, val_loader, device):
     model.eval()
 
@@ -336,6 +404,35 @@ def validate(model, val_loader, device):
 
     preds, targets, code_lens = np.concatenate(
         preds), np.concatenate(targets), np.concatenate(code_lens)
-    acc_index = np.where(code_lens <= RANK_COUNT)
+
     return preds, targets, 0
-    # accuracy_score(targets[acc_index], preds[acc_index])
+
+
+def markdown_validate(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    preds = []
+    mark_ids = []
+    mark_hash = {}
+
+    with torch.no_grad():
+        for idx, (ids, mask, target, id) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device))
+            preds += pred.detach().cpu().numpy().ravel().tolist()
+            mark_ids += [label_to_id(i) for i in id]
+
+    for mark, score in zip(mark_ids, preds):
+        mark_hash[mark] = score
+
+    return mark_hash
+
+
+def id_to_label(ids):
+    return [LABELS.index(s) for s in ids]
+
+
+def label_to_id(labels):
+    return ''.join([LABELS[i] for i in labels])

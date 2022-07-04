@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 from config import BS, NW, SIGMOID_PATH
 from dataset import SigMoidDataset
-from helper import get_features_val, sigmoid_validate
+from helper import get_features_val, sigmoid_validate, sigmoid_validate_detail
 
 from model import SigMoidModel
 
@@ -38,6 +38,6 @@ val_ds = SigMoidDataset(dict_cellid_source, md_max_len=64,
 val_loader = DataLoader(val_ds, batch_size=32, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-accurancy, _ = sigmoid_validate(model, val_loader, device)
+zero_accurancy, one_accurancy = sigmoid_validate_detail(model, val_loader, device)
 
-print('accurancy ', accurancy)
+print(zero_accurancy, one_accurancy)

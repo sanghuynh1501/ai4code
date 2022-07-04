@@ -43,12 +43,14 @@ f.close()
 unique_ids = pd.unique(train_df['id'])
 ids = unique_ids[:100000]
 train_df = train_df[train_df['id'].isin(ids)]
-train_df["pct_rank"] = train_df["rank"] / train_df.groupby("id")["cell_id"].transform("count")
+train_df["pct_rank"] = train_df["rank"] / \
+    train_df.groupby("id")["cell_id"].transform("count")
 
 unique_ids = pd.unique(val_df['id'])
 ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]
-val_df["pct_rank"] = val_df["rank"] / val_df.groupby("id")["cell_id"].transform("count")
+val_df["pct_rank"] = val_df["rank"] / \
+    val_df.groupby("id")["cell_id"].transform("count")
 
 train_fts, all_labels, _ = get_features_val(train_df, 'train')
 val_fts, _, _ = get_features_val(val_df, 'test')
@@ -77,62 +79,62 @@ print('accurancy ', accurancy)
 def train(model, train_loader, val_loader, epochs):
     np.random.seed(0)
     # Creating optimizer and lr schedulers
-    param_optimizer = list(model.named_parameters())
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(
-            nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(
-            nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
+    # param_optimizer = list(model.named_parameters())
+    # no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    # optimizer_grouped_parameters = [
+    #     {'params': [p for n, p in param_optimizer if not any(
+    #         nd in n for nd in no_decay)], 'weight_decay': 0.01},
+    #     {'params': [p for n, p in param_optimizer if any(
+    #         nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    # ]
 
-    num_train_optimization_steps = int(
-        epochs * len(train_loader) / accumulation_steps)
-    optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
-                      correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
-                                                num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
+    # num_train_optimization_steps = int(
+    #     epochs * len(train_loader) / accumulation_steps)
+    # optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
+    #                   correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
+    # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
+    #                                             num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
 
-    criterion = torch.nn.L1Loss()
-    # NLLLoss(
-    #     weight=torch.tensor(class_weights).to(device),
-    #     reduction='mean',
-    # )
-    scaler = torch.cuda.amp.GradScaler()
+    # criterion = torch.nn.L1Loss()
+    # # NLLLoss(
+    # #     weight=torch.tensor(class_weights).to(device),
+    # #     reduction='mean',
+    # # )
+    # scaler = torch.cuda.amp.GradScaler()
 
-    for e in range(epochs):
-        model.train()
-        total_loss = 0
-        total_step = 0
-        tbar = tqdm(train_loader, file=sys.stdout)
+    # for e in range(epochs):
+    #     model.train()
+    #     total_loss = 0
+    #     total_step = 0
+    #     tbar = tqdm(train_loader, file=sys.stdout)
 
-        y_pred = []
-        for idx, (ids, mask, fts, loss_mask, code_lens, target) in enumerate(tbar):
-            with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_lens.to(device), loss_mask.to(device))
-                loss = criterion(pred, torch.squeeze(target).to(device))
-            scaler.scale(loss).backward()
-            if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-                scheduler.step()
+    #     y_pred = []
+    #     for idx, (ids, mask, fts, loss_mask, code_lens, target) in enumerate(tbar):
+    #         with torch.cuda.amp.autocast():
+    #             pred = model(ids.to(device), mask.to(device),
+    #                          fts.to(device), code_lens.to(device), loss_mask.to(device))
+    #             loss = criterion(pred, torch.squeeze(target).to(device))
+    #         scaler.scale(loss).backward()
+    #         if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
+    #             scaler.step(optimizer)
+    #             scaler.update()
+    #             optimizer.zero_grad()
+    #             scheduler.step()
 
-            total_loss += loss.detach().cpu().item()
-            total_step += 1
+    #         total_loss += loss.detach().cpu().item()
+    #         total_step += 1
 
-            avg_loss = np.round(total_loss / total_step, 4)
+    #         avg_loss = np.round(total_loss / total_step, 4)
 
-            tbar.set_description(
-                f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
+    #         tbar.set_description(
+    #             f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
-            if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                y_pred, _, acc = validate(model, val_loader, device)
-                print('acc ', acc)
-                cal_kendall_tau(val_df, y_pred, relative, df_orders)
-                torch.save(model.state_dict(), CODE_MARK_PATH)
-                model.train()
+    # if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
+    y_pred, _, acc = validate(model, val_loader, device)
+    print('acc ', acc)
+    cal_kendall_tau(val_df, y_pred, relative, df_orders)
+    # torch.save(model.state_dict(), CODE_MARK_PATH)
+    # model.train()
 
 
 train(model, train_loader, val_loader, epochs=EPOCH)

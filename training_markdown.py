@@ -1,40 +1,36 @@
+import pickle
 import sys
 
 import numpy as np
 import pandas as pd
+from sklearn.utils import compute_class_weight
 import torch
-from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import BS, DATA_DIR, NW, SIGMOID_PATH
-from dataset import MarkdownDataset
-from helper import (get_features, get_ranks, kendall_tau, preprocess_text,
-                    read_notebook)
-from model import MarkdownModel, SigMoidModel
+from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, MD_MAX_LEN, NW, SIGMOID_PATH, TOTAL_MAX_LEN,
+                    accumulation_steps)
+from dataset import MarkdownDataset, MarkdownOnlyDataset, SigMoidDataset
+from helper import cal_kendall_tau, get_features_mark, get_features_val, markdown_validate, sigmoid_validate, validate
+from model import MarkdownModel, MarkdownOnlyModel, SigMoidModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-model = MarkdownModel().to(device)
+model = MarkdownOnlyModel()
+# model.load_state_dict(torch.load(CODE_MARK_PATH))
+model = model.cuda()
+
 model_sigmoid = SigMoidModel().to(device)
 model_sigmoid.load_state_dict(torch.load(SIGMOID_PATH))
-model_sigmoid = model.cuda()
+model_sigmoid = model_sigmoid.cuda()
 
-paths_train = list((DATA_DIR / 'train').glob('*.json'))[:1000]
-notebooks_train = [
-    read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
-]
-
-df = (
-    pd.concat(notebooks_train)
-    .set_index('id', append=True)
-    .swaplevel()
-    .sort_index(level='id', sort_remaining=False)
-)
+model_mark = MarkdownModel()
+model_mark.load_state_dict(torch.load(CODE_MARK_PATH))
+model_mark = model_mark.cuda()
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -42,99 +38,44 @@ df_orders = pd.read_csv(
     squeeze=True,
 ).str.split()
 
-df_orders_ = df_orders.to_frame().join(
-    df.reset_index('cell_id').groupby('id')['cell_id'].apply(list),
-    how='right',
-)
+train_df = pd.read_csv('data_dump/train_df.csv')
+val_df = pd.read_csv('data_dump/val_df.csv')
+with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
+    dict_cellid_source = pickle.load(f)
+f.close()
 
-ranks = {}
-for id_, cell_order, cell_id in df_orders_.itertuples():
-    ranks[id_] = {'cell_id': cell_id, 'rank': get_ranks(cell_order, cell_id)}
+unique_ids = pd.unique(train_df['id'])
+# ids = unique_ids[:100000]
+# train_df = train_df[train_df['id'].isin(ids)]
+train_df["pct_rank"] = train_df["rank"] / \
+    train_df.groupby("id")["cell_id"].transform("count")
 
-df_ranks = (
-    pd.DataFrame
-    .from_dict(ranks, orient='index')
-    .rename_axis('id')
-    .apply(pd.Series.explode)
-    .set_index('cell_id', append=True)
-)
+unique_ids = pd.unique(val_df['id'])
+ids = unique_ids[:1000]
+val_df = val_df[val_df['id'].isin(ids)]
+val_df["pct_rank"] = val_df["rank"] / \
+    val_df.groupby("id")["cell_id"].transform("count")
 
-df_ancestors = pd.read_csv(DATA_DIR / 'train_ancestors.csv', index_col='id')
+train_fts = get_features_mark(train_df, 'train')
+val_fts = get_features_mark(val_df, 'test')
+val_fts_full, _, _ = get_features_val(val_df, 'test')
 
-df = df.reset_index().merge(
-    df_ranks, on=['id', 'cell_id']).merge(df_ancestors, on=['id'])
-df['pct_rank'] = df['rank'] / df.groupby('id')['cell_id'].transform('count')
+train_ds = MarkdownOnlyDataset(train_fts, dict_cellid_source, 128)
+val_ds = MarkdownOnlyDataset(val_fts, dict_cellid_source, 128)
+val_full_ds = SigMoidDataset(dict_cellid_source, md_max_len=64,
+                             total_max_len=512, fts=val_fts_full)
 
-NVALID = 0.1
-
-splitter = GroupShuffleSplit(n_splits=1, test_size=NVALID, random_state=0)
-train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
-
-train_df = df.loc[train_ind].reset_index(drop=True)
-val_df = df.loc[val_ind].reset_index(drop=True)
-val_df = val_df[:4000]
-
-train_df_mark = train_df[train_df['cell_type']
-                         == 'markdown'].reset_index(drop=True)
-train_df_mark.source = train_df_mark.source.apply(preprocess_text)
-
-val_df_mark = val_df[val_df['cell_type'] == 'markdown'].reset_index(drop=True)
-val_df_mark.source = val_df_mark.source.apply(preprocess_text)
-
-train_fts = get_features(train_df)
-val_fts = get_features(val_df)
-
-train_ds = MarkdownDataset(train_df_mark, md_max_len=64,
-                           total_max_len=512, fts=train_fts)
-val_ds = MarkdownDataset(val_df_mark, md_max_len=64,
-                         total_max_len=512, fts=val_fts)
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=True)
 val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
+val_full_loader = DataLoader(val_full_ds, batch_size=32, shuffle=False, num_workers=NW,
+                             pin_memory=False, drop_last=False)
 
-param_optimizer = list(model.named_parameters())
-no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-optimizer_grouped_parameters = [
-    {'params': [p for n, p in param_optimizer if not any(
-        nd in n for nd in no_decay)], 'weight_decay': 0.01},
-    {'params': [p for n, p in param_optimizer if any(
-        nd in n for nd in no_decay)], 'weight_decay': 0.0}
-]
+_, relative = sigmoid_validate(
+    model_sigmoid, val_full_loader, device)
 
-EPOCHS = 5
-accumulation_steps = 4
-
-num_train_optimization_steps = int(
-    EPOCHS * len(train_loader) / accumulation_steps)
-optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
-                  correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
-scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
-                                            num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
-
-criterion = torch.nn.L1Loss()
-scaler = torch.cuda.amp.GradScaler()
-
-max_test_tau = 0
-
-
-def validate(model, val_loader):
-    model.eval()
-
-    tbar = tqdm(val_loader, file=sys.stdout)
-
-    preds = []
-    labels = []
-
-    with torch.no_grad():
-        for idx, (ids, mask, fts, target) in enumerate(tbar):
-            with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device), fts.to(device))
-
-            preds.append(pred.detach().cpu().numpy().ravel())
-            labels.append(target.detach().cpu().numpy().ravel())
-
-    return np.concatenate(labels), np.concatenate(preds)
+score, _, _ = validate(model_mark, val_full_loader, device)
 
 
 def train(model, train_loader, val_loader, epochs):
@@ -161,14 +102,13 @@ def train(model, train_loader, val_loader, epochs):
 
     for e in range(epochs):
         model.train()
+        total_loss = 0
+        total_step = 0
         tbar = tqdm(train_loader, file=sys.stdout)
-        loss_list = []
-        preds = []
-        labels = []
 
-        for idx, (ids, mask, fts, target) in enumerate(tbar):
+        for idx, (ids, mask, target, _) in enumerate(tbar):
             with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device), fts.to(device))
+                pred = model(ids.to(device), mask.to(device))
                 loss = criterion(pred, target.to(device))
             scaler.scale(loss).backward()
             if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
@@ -177,27 +117,19 @@ def train(model, train_loader, val_loader, epochs):
                 optimizer.zero_grad()
                 scheduler.step()
 
-            loss_list.append(loss.detach().cpu().item())
-            preds.append(pred.detach().cpu().numpy().ravel())
-            labels.append(target.detach().cpu().numpy().ravel())
+            total_loss += loss.detach().cpu().item()
+            total_step += 1
 
-            avg_loss = np.round(np.mean(loss_list), 4)
+            avg_loss = np.round(total_loss / total_step, 4)
 
             tbar.set_description(
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
-        _, y_pred = validate(model, val_loader)
-        val_df["pred"] = val_df.groupby(["id", "cell_type"])[
-            "rank"].rank(pct=True)
-        val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
-        y_dummy = val_df.sort_values("pred").groupby('id')[
-            'cell_id'].apply(list)
-        print("Preds score", kendall_tau(
-            df_orders.loc[y_dummy.index], y_dummy))
-
-    return model, y_pred
+            if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
+                mark_dict = markdown_validate(model, val_loader, device)
+                cal_kendall_tau(val_df, score, mark_dict, relative, df_orders)
+                torch.save(model.state_dict(), MARK_PATH)
+                model.train()
 
 
-model = MarkdownModel()
-model = model.cuda()
-model, y_pred = train(model, train_loader, val_loader, epochs=EPOCHS)
+train(model, train_loader, val_loader, epochs=EPOCH)

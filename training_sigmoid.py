@@ -43,10 +43,12 @@ f.close()
 unique_ids = pd.unique(train_df['id'])
 ids = unique_ids[:100000]
 train_df = train_df[train_df['id'].isin(ids)]
+train_df["pct_rank"] = train_df["rank"] / train_df.groupby("id")["cell_id"].transform("count")
 
 unique_ids = pd.unique(val_df['id'])
 ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]
+val_df["pct_rank"] = val_df["rank"] / val_df.groupby("id")["cell_id"].transform("count")
 
 train_fts, _, all_labels = get_features_val(train_df, 'sigmoid')
 val_fts, _, _ = get_features_val(val_df, 'test')
@@ -72,7 +74,7 @@ train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
 val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
 
-_, y_pred = validate(model_mark, val_loader, device)
+_, y_pred, _ = validate(model_mark, val_loader, device)
 
 
 def train(model, train_loader, val_loader, epochs):
@@ -105,7 +107,7 @@ def train(model, train_loader, val_loader, epochs):
         total_step = 0
         tbar = tqdm(train_loader, file=sys.stdout)
 
-        for idx, (ids, mask, fts, code_lens, _, target, _) in enumerate(tbar):
+        for idx, (ids, mask, fts, _, code_lens, _, target, _) in enumerate(tbar):
             with torch.cuda.amp.autocast():
                 pred = model(ids.to(device), mask.to(device),
                              fts.to(device), code_lens.to(device))
