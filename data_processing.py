@@ -8,6 +8,8 @@ from config import DATA_DIR
 from helper import (get_ranks, preprocess_code,
                     preprocess_text, read_notebook)
 
+is_sigmoid = False
+
 paths_train = list((DATA_DIR / 'train').glob('*.json'))
 notebooks_train = [
     read_notebook(path) for path in tqdm(paths_train, desc='Train NBs')
@@ -50,8 +52,13 @@ df = df.reset_index().merge(
 
 df.loc[df['cell_type'] == 'markdown', 'source'] = df[df['cell_type']
                                                      == 'markdown'].source.apply(preprocess_text)
-df.loc[df['cell_type'] == 'code', 'source'] = df[df['cell_type']
-                                                 == 'code'].source.apply(preprocess_code)
+
+if is_sigmoid:
+    df.loc[df['cell_type'] == 'code', 'source'] = df[df['cell_type']
+                                                     == 'code'].source.apply(preprocess_text)
+else:
+    df.loc[df['cell_type'] == 'code', 'source'] = df[df['cell_type']
+                                                     == 'code'].source.apply(preprocess_code)
 
 dict_cellid_source = dict(
     zip(df['cell_id'].values, df['source'].values))
@@ -64,20 +71,19 @@ train_ind, val_ind = next(splitter.split(df, groups=df['ancestor_id']))
 train_df = df.loc[train_ind].reset_index(drop=True)
 val_df = df.loc[val_ind].reset_index(drop=True)
 
-train_df.to_csv('data_dump/train_df.csv')
-val_df.to_csv('data_dump/val_df.csv')
+if is_sigmoid:
+    train_df.to_csv('data_dump/train_sigmoid_df.csv')
+    val_df.to_csv('data_dump/val_sigmoid_df.csv')
 
-with open('data_dump/dict_cellid_source.pkl', 'wb') as handle:
-    pickle.dump(dict_cellid_source, handle, protocol=pickle.HIGHEST_PROTOCOL)
-handle.close()
+    with open('data_dump/dict_cellid_source_sigmoid.pkl', 'wb') as handle:
+        pickle.dump(dict_cellid_source, handle,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    handle.close()
+else:
+    train_df.to_csv('data_dump/train_df.csv')
+    val_df.to_csv('data_dump/val_df.csv')
 
-# features_train = get_features_class(train_df)
-# features_val = get_features_class(val_df)
-
-# out_file = open('data_dump/features_train.json', 'w')
-# json.dump(features_train, out_file, indent=6)
-# out_file.close()
-
-# out_file = open('data_dump/features_val.json', 'w')
-# json.dump(features_val, out_file, indent=6)
-# out_file.close()
+    with open('data_dump/dict_cellid_source.pkl', 'wb') as handle:
+        pickle.dump(dict_cellid_source, handle,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    handle.close()

@@ -3,7 +3,7 @@ from config import BERT_MODEL_PATH, CODE_MAX_LEN, RANK_COUNT, RANKS
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
-from helper import id_to_label
+from helper import get_cosine_features, id_to_label
 
 
 class MarkdownDataset(Dataset):
@@ -172,6 +172,30 @@ class SigMoidDataset(Dataset):
         assert len(ids) == self.total_max_len
 
         return ids, mask, fts, loss_mask, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.FloatTensor([label]), torch.FloatTensor([relative]), torch.FloatTensor([total_code_len])
+
+    def __len__(self):
+        return len(self.fts)
+
+
+class SigMoidDatasetNew(Dataset):
+
+    def __init__(self, dict_cellid_source, vectorizer, fts):
+        super().__init__()
+        self.dict_cellid_source = dict_cellid_source
+        self.vectorizer = vectorizer
+        self.fts = fts
+
+    def __getitem__(self, index):
+        row = self.fts[index]
+
+        codes = row['codes']
+        mark = row['mark']
+        similarity_scores = get_cosine_features(
+            mark, codes, self.dict_cellid_source, self.vectorizer)
+        label = row['relative']
+        total_code_len = row['total_code_len']
+
+        return torch.FloatTensor(similarity_scores),  torch.FloatTensor([label]), torch.FloatTensor([total_code_len])
 
     def __len__(self):
         return len(self.fts)

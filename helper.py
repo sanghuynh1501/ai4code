@@ -1,17 +1,19 @@
+from distutils import text_file
 import re
 import sys
 from bisect import bisect
+from matplotlib import pyplot as plt
 
 import nltk
 import numpy as np
 import pandas as pd
 import torch
 from nltk.stem import WordNetLemmatizer
-from sklearn.metrics import accuracy_score
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
-from config import LABELS, RANK_COUNT, RANKS
+from config import LABELS, RANK_COUNT, RANKS, SIGMOID_RANK_COUNT
 
 nltk.download('wordnet')
 nltk.download('omw-1.4')
@@ -207,6 +209,145 @@ def get_features_val(df, mode='train'):
     return features, labels, relatives
 
 
+def get_cosine_features(mark, codes, dict_cellid_source, vectorizer):
+    codes = [dict_cellid_source[code] for code in codes]
+    mark = [dict_cellid_source[mark]]
+
+    codes = vectorizer.transform(codes).toarray()
+    mark = vectorizer.transform(mark).toarray()[0]
+
+    similarity_scores = codes.dot(
+        mark) / (np.linalg.norm(codes, axis=1) * np.linalg.norm(mark))
+    if len(similarity_scores) < SIGMOID_RANK_COUNT:
+        similarity_scores = np.concatenate(
+            [similarity_scores, np.ones(SIGMOID_RANK_COUNT - len(similarity_scores),)], 0)
+
+    return similarity_scores
+
+
+def get_features_sigmoid_text_all(df, dict_cellid_source, mode='train'):
+
+    features = []
+    labels = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for _, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+        total_code_len = len(code_sub_df_all)
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            for j in range(0, code_sub_df_all.shape[0], SIGMOID_RANK_COUNT):
+                code_sub_df = code_sub_df_all[j: j + SIGMOID_RANK_COUNT]
+
+                codes = code_sub_df['cell_id'].to_list()
+                ranks = code_sub_df['rank'].values
+
+                mark = mark_sub_df_all.iloc[i]['cell_id']
+                rank = mark_sub_df_all.iloc[i]['rank']
+
+                min_rank = 0 if j == 0 else ranks[0]
+                max_rank = ranks[-1]
+
+                relative = 1
+                if total_code_len - j <= SIGMOID_RANK_COUNT:
+                    relative = 1
+                else:
+                    if rank < min_rank or rank > max_rank:
+                        relative = 0
+
+                if mode == 'train':
+                    if total_code_len > RANK_COUNT:
+                        text_all = ''
+                        for code in codes:
+                            text_all += (dict_cellid_source[code] + ' ')
+                        text_all += dict_cellid_source[mark]
+                        features.append(text_all)
+                        labels.append(relative)
+                else:
+                    text_all = ''
+                    for code in codes:
+                        text_all += (dict_cellid_source[code] + ' ')
+                    text_all += dict_cellid_source[mark]
+                    features.append(text_all)
+                    labels.append(relative)
+
+    return features, np.array(labels)
+
+
+def get_features_new(df, mode='train'):
+
+    features = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for _, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+        total_code_len = len(code_sub_df_all)
+        total_md = mark_sub_df_all.shape[0]
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            for j in range(0, code_sub_df_all.shape[0], SIGMOID_RANK_COUNT):
+                code_sub_df = code_sub_df_all[j: j + SIGMOID_RANK_COUNT]
+
+                codes = code_sub_df['cell_id'].to_list()
+                ranks = code_sub_df['rank'].values
+                total_code = code_sub_df.shape[0]
+
+                mark = mark_sub_df_all.iloc[i]['cell_id']
+                rank = mark_sub_df_all.iloc[i]['rank']
+
+                min_rank = 0 if j == 0 else ranks[0]
+                max_rank = ranks[-1]
+
+                relative = 1
+                if total_code_len - j <= SIGMOID_RANK_COUNT:
+                    relative = 1
+                else:
+                    if rank < min_rank or rank > max_rank:
+                        relative = 0
+
+                if mode == 'classification':
+                    if relative == 1:
+                        feature = {
+                            'total_code': int(total_code),
+                            'total_md': int(total_md),
+                            'codes': codes,
+                            'mark': mark,
+                            'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
+                            'relative': relative,
+                            'total_code_len': total_code_len
+                        }
+                        features.append(feature)
+                elif mode == 'sigmoid':
+                    if total_code_len > RANK_COUNT:
+                        feature = {
+                            'total_code': int(total_code),
+                            'total_md': int(total_md),
+                            'codes': codes,
+                            'mark': mark,
+                            'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
+                            'relative': relative,
+                            'total_code_len': total_code_len
+                        }
+                        features.append(feature)
+                else:
+                    feature = {
+                        'total_code': int(total_code),
+                        'total_md': int(total_md),
+                        'codes': codes,
+                        'mark': mark,
+                        'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
+                        'relative': relative,
+                        'total_code_len': total_code_len
+                    }
+                    features.append(feature)
+
+    return np.array(features)
+
+
 def get_features_mark(df, mode='train'):
 
     features = []
@@ -268,26 +409,15 @@ def cal_kendall_tau(df, pred, mark_dict, relative, df_orders):
         for i in range(0, mark_sub_df_all.shape[0]):
             max_score = 0
             max_index = 0
-            # max_j = 0
-            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+            one_count = 0
+            for _ in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 if relative[index] >= max_score:
                     max_score = relative[index]
                     max_index = index
-                    # max_j = j
+                    one_count += 1
                 index += 1
-
-            # rank_index = RANKS[pred[max_index]]
-            # code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
-            # if rank_index == 0:
-            #     cell_id = mark_sub_df_all.iloc[i]['cell_id']
-            #     final_pred[cell_id] = 0
-            # else:
-            #     start_rank = 0
-            #     rank_index -= 1
-            #     if rank_index < len(code_sub_df):
-            #         start_rank = code_sub_df.iloc[rank_index]['rank']
             cell_id = mark_sub_df_all.iloc[i]['cell_id']
-            if max_score == 0:
+            if max_score == 0 or one_count > 1:
                 final_pred[cell_id] = mark_dict[cell_id]
             else:
                 final_pred[cell_id] = pred[max_index]
@@ -436,3 +566,31 @@ def id_to_label(ids):
 
 def label_to_id(labels):
     return ''.join([LABELS[i] for i in labels])
+
+
+def plot_cosin_distance(X, y):
+    zero_index = np.nonzero(y == 0)[0]
+    one_index = np.nonzero(y == 1)[0]
+
+    x1 = X[zero_index, 0]
+    y1 = X[zero_index, 1]
+
+    # dataset2
+    x2 = X[one_index, 0]
+    y2 = X[one_index, 1]
+
+    plt.scatter(x1, y1, c="green",
+                linewidths=2,
+                marker="s",
+                edgecolor="green",
+                s=len(x1))
+
+    plt.scatter(x2, y2, c="red",
+                linewidths=2,
+                marker="s",
+                edgecolor="red",
+                s=len(x2))
+
+    plt.xlabel("X-axis")
+    plt.ylabel("Y-axis")
+    plt.show()

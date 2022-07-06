@@ -3,15 +3,14 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sklearn.utils import compute_class_weight
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, MD_MAX_LEN, NW, SIGMOID_PATH, TOTAL_MAX_LEN,
+from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, NW, SIGMOID_PATH,
                     accumulation_steps)
-from dataset import MarkdownDataset, MarkdownOnlyDataset, SigMoidDataset
+from dataset import MarkdownOnlyDataset, SigMoidDataset
 from helper import cal_kendall_tau, get_features_mark, get_features_val, markdown_validate, sigmoid_validate, validate
 from model import MarkdownModel, MarkdownOnlyModel, SigMoidModel
 
@@ -21,7 +20,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 model = MarkdownOnlyModel()
-# model.load_state_dict(torch.load(CODE_MARK_PATH))
+model.load_state_dict(torch.load(MARK_PATH))
 model = model.cuda()
 
 model_sigmoid = SigMoidModel().to(device)
@@ -44,8 +43,8 @@ with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
 
-unique_ids = pd.unique(train_df['id'])
-# ids = unique_ids[:100000]
+# unique_ids = pd.unique(train_df['id'])
+# ids = unique_ids[:100]
 # train_df = train_df[train_df['id'].isin(ids)]
 train_df["pct_rank"] = train_df["rank"] / \
     train_df.groupby("id")["cell_id"].transform("count")

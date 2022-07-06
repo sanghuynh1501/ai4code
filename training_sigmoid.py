@@ -8,12 +8,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, NW, SIGMOID_PATH,
+from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, NW, SIGMOID_PATH,
                     accumulation_steps)
-from dataset import SigMoidDataset
-from helper import cal_kendall_tau, get_features_val, sigmoid_validate, validate
+from dataset import MarkdownOnlyDataset, SigMoidDataset
+from helper import cal_kendall_tau, get_features_mark, get_features_val, markdown_validate, sigmoid_validate, validate
 from loss import BinaryFocalLossWithLogits
-from model import MarkdownModel, SigMoidModel
+from model import MarkdownModel, MarkdownOnlyModel, SigMoidModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
@@ -25,8 +25,12 @@ model.load_state_dict(torch.load(SIGMOID_PATH))
 model = model.cuda()
 
 model_mark = MarkdownModel()
-# model_mark.load_state_dict(torch.load(CODE_MARK_PATH))
+model_mark.load_state_dict(torch.load(CODE_MARK_PATH))
 model_mark = model_mark.cuda()
+
+model_mark_only = MarkdownOnlyModel()
+model_mark_only.load_state_dict(torch.load(MARK_PATH))
+model_mark_only = model_mark_only.cuda()
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -40,18 +44,21 @@ with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
 
-unique_ids = pd.unique(train_df['id'])
-ids = unique_ids[:100000]
-train_df = train_df[train_df['id'].isin(ids)]
-train_df["pct_rank"] = train_df["rank"] / train_df.groupby("id")["cell_id"].transform("count")
+# unique_ids = pd.unique(train_df['id'])
+# ids = unique_ids[:100000]
+# train_df = train_df[train_df['id'].isin(ids)]
+train_df["pct_rank"] = train_df["rank"] / \
+    train_df.groupby("id")["cell_id"].transform("count")
 
 unique_ids = pd.unique(val_df['id'])
 ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]
-val_df["pct_rank"] = val_df["rank"] / val_df.groupby("id")["cell_id"].transform("count")
+val_df["pct_rank"] = val_df["rank"] / \
+    val_df.groupby("id")["cell_id"].transform("count")
 
 train_fts, _, all_labels = get_features_val(train_df, 'sigmoid')
 val_fts, _, _ = get_features_val(val_df, 'test')
+val_fts_only = get_features_mark(val_df, 'test')
 
 all_labels.sort()
 label_dict = {}
@@ -68,13 +75,17 @@ train_ds = SigMoidDataset(
     dict_cellid_source, md_max_len=64, total_max_len=512, fts=train_fts)
 val_ds = SigMoidDataset(dict_cellid_source, md_max_len=64,
                         total_max_len=512, fts=val_fts)
+val_ds_only = MarkdownOnlyDataset(val_fts_only, dict_cellid_source, 128)
 
 train_loader = DataLoader(train_ds, batch_size=BS, shuffle=True, num_workers=NW,
                           pin_memory=False, drop_last=False)
 val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=NW,
                         pin_memory=False, drop_last=False)
+val_loader_only = DataLoader(val_ds_only, batch_size=BS, shuffle=False, num_workers=NW,
+                             pin_memory=False, drop_last=False)
 
-_, y_pred, _ = validate(model_mark, val_loader, device)
+score, _, _ = validate(model_mark, val_loader, device)
+mark_dict = markdown_validate(model_mark_only, val_loader_only, device)
 
 
 def train(model, train_loader, val_loader, epochs):
@@ -129,7 +140,7 @@ def train(model, train_loader, val_loader, epochs):
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
                 _, relative = sigmoid_validate(model, val_loader, device)
-                cal_kendall_tau(val_df, y_pred, relative, df_orders)
+                cal_kendall_tau(val_df, score, mark_dict, relative, df_orders)
                 torch.save(model.state_dict(), SIGMOID_PATH)
                 model.train()
 
