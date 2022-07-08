@@ -139,7 +139,9 @@ def train(model, train_loader, val_loader, epochs):
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                _, relative = sigmoid_validate(model, val_loader, device)
+                acc, true, false, relative, _, _ = sigmoid_validate(
+                    model, val_loader, device)
+                print('accurancy ', acc, true, false)
                 cal_kendall_tau(val_df, score, mark_dict, relative, df_orders)
                 torch.save(model.state_dict(), SIGMOID_PATH)
                 model.train()

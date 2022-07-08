@@ -1,15 +1,13 @@
-from distutils import text_file
 import re
 import sys
 from bisect import bisect
-from matplotlib import pyplot as plt
 
 import nltk
 import numpy as np
 import pandas as pd
 import torch
+from matplotlib import pyplot as plt
 from nltk.stem import WordNetLemmatizer
-from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from wordcloud import STOPWORDS
 
@@ -279,6 +277,7 @@ def get_features_sigmoid_text_all(df, dict_cellid_source, mode='train'):
 def get_features_new(df, mode='train'):
 
     features = []
+    labels = []
     df = df.sort_values('rank').reset_index(drop=True)
 
     for _, sub_df in tqdm(df.groupby('id')):
@@ -289,8 +288,8 @@ def get_features_new(df, mode='train'):
         total_md = mark_sub_df_all.shape[0]
 
         for i in range(0, mark_sub_df_all.shape[0]):
-            for j in range(0, code_sub_df_all.shape[0], SIGMOID_RANK_COUNT):
-                code_sub_df = code_sub_df_all[j: j + SIGMOID_RANK_COUNT]
+            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
 
                 codes = code_sub_df['cell_id'].to_list()
                 ranks = code_sub_df['rank'].values
@@ -303,7 +302,7 @@ def get_features_new(df, mode='train'):
                 max_rank = ranks[-1]
 
                 relative = 1
-                if total_code_len - j <= SIGMOID_RANK_COUNT:
+                if total_code_len - j <= RANK_COUNT and rank > min_rank:
                     relative = 1
                 else:
                     if rank < min_rank or rank > max_rank:
@@ -344,8 +343,9 @@ def get_features_new(df, mode='train'):
                         'total_code_len': total_code_len
                     }
                     features.append(feature)
+                labels.append(relative)
 
-    return np.array(features)
+    return np.array(features), np.array(labels)
 
 
 def get_features_mark(df, mode='train'):
@@ -440,13 +440,77 @@ def cal_kendall_tau(df, pred, mark_dict, relative, df_orders):
     print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
 
 
-def sigmoid_validate(model, val_loader, device):
+def sigmoid_validate(model, val_loader, device, threshold=0.5):
     model.eval()
 
     tbar = tqdm(val_loader, file=sys.stdout)
 
     total = 0
+    zero_total = 0
+    one_total = 0
+
     total_true = 0
+    total_zero_true = 0
+    total_one_true = 0
+    relatives = []
+
+    preds = []
+    targets = []
+
+    with torch.no_grad():
+        for idx, (ids, mask, fts, _, code_lens, _, target, total_code_lens) in enumerate(tbar):
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device),
+                             fts.to(device), code_lens.to(device))
+
+            code_lens = (total_code_lens.detach().cpu().numpy().ravel()
+                         <= RANK_COUNT).astype(np.int8)
+            code_len_indexs = np.nonzero(code_lens == 1)[0]
+
+            pred = torch.sigmoid(pred)
+            pred = pred.detach().cpu().numpy().ravel()
+            pred[code_len_indexs] = 1.0
+            preds += pred.tolist()
+
+            pred = (pred >= threshold).astype(np.int8)
+            # pred = (pred | code_lens).astype(np.int8)
+            # pred = pred + code_lens
+            pred = np.clip(pred, 0, 1)
+            relatives += pred.tolist()
+
+            target = target.detach().cpu().numpy().ravel()
+            targets += target.tolist()
+
+            zero_indexes = np.nonzero(target == 0)[0]
+            one_indexes = np.nonzero(target == 1)[0]
+
+            zero_target = target[zero_indexes]
+            one_target = target[one_indexes]
+
+            zero_pred = pred[zero_indexes]
+            one_pred = pred[one_indexes]
+
+            zero_total += len(zero_target)
+            one_total += len(one_target)
+            total += len(target)
+
+            total_zero_true += np.sum((zero_pred ==
+                                       zero_target).astype(np.int8))
+            total_one_true += np.sum((one_pred == one_target).astype(np.int8))
+            total_true += np.sum((pred == target).astype(np.int8))
+
+    return total_true / total, total_zero_true / zero_total, total_one_true / one_total, relatives, targets, preds
+
+
+def sigmoid_validate_detail(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    zero_total = 0
+    one_total = 0
+    total_zero_true = 0
+    total_one_true = 0
     relatives = []
 
     with torch.no_grad():
@@ -460,38 +524,7 @@ def sigmoid_validate(model, val_loader, device):
             pred = pred.detach().cpu().numpy().ravel()
             pred = (sigmoid(pred) >= 0.5)
             pred = (pred | code_lens).astype(np.int8)
-            # pred = pred + code_lens
-            pred = np.clip(pred, 0, 1)
             relatives += pred.tolist()
-            target = target.detach().cpu().numpy().ravel()
-            total += len(target)
-            total_true += np.sum((pred == target).astype(np.int8))
-
-    return total_true / total, relatives
-
-
-def sigmoid_validate_detail(model, val_loader, device):
-    model.eval()
-
-    tbar = tqdm(val_loader, file=sys.stdout)
-
-    zero_total = 0
-    one_total = 0
-    total_zero_true = 0
-    total_one_true = 0
-
-    with torch.no_grad():
-        for idx, (ids, mask, fts, _, code_lens, _, target, total_code_lens) in enumerate(tbar):
-            with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_lens.to(device))
-
-            code_lens = (total_code_lens.detach().cpu().numpy().ravel()
-                         <= RANK_COUNT)
-            pred = pred.detach().cpu().numpy().ravel()
-            pred = (sigmoid(pred) >= 0.5)
-            pred = (pred | code_lens).astype(np.int8)
-            pred = np.clip(pred, 0, 1)
             target = target.detach().cpu().numpy().ravel()
 
             zero_indexes = np.where(np.any(target == 0))
@@ -510,7 +543,7 @@ def sigmoid_validate_detail(model, val_loader, device):
                                       zero_target).astype(np.int8))
             total_one_true += np.sum((one_pred == one_target).astype(np.int8))
 
-    return total_zero_true / zero_total, total_one_true / one_total
+    return total_zero_true / zero_total, total_one_true / one_total, relatives
 
 
 def validate(model, val_loader, device):

@@ -30,8 +30,7 @@ class MarkdownDataset(Dataset):
         )
         codes = row['codes']
         code_inputs = self.tokenizer.batch_encode_plus(
-            [str(self.dict_cellid_source[x])
-             for x in codes][:self.total_max_len:2],
+            [str(self.dict_cellid_source[x]) for x in codes],
             add_special_tokens=True,
             max_length=CODE_MAX_LEN,
             padding='max_length',
