@@ -4,6 +4,7 @@ BERT_MODEL_PATH = 'microsoft/codebert-base'
 MARK_PATH = 'weights/model_markdown_07840.pth'
 CODE_PATH = 'weights/model_code.pth'
 CODE_MARK_PATH = 'weights/model_code_mark_07575.pth'
+CODE_MARK_RANK_PATH = 'weights/model_code_mark_rank.pth'
 SIGMOID_PATH = 'weights/model_sigmoid_40_mae.pth'
 FASTTEST_MODEL = 'weights/model140000.bin'
 DATA_DIR = Path('AI4Code')

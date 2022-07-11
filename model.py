@@ -11,12 +11,29 @@ class MarkdownModel(nn.Module):
         self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
         self.top = nn.Linear(770, 1)
 
-    def forward(self, ids, mask, fts, code_lens, loss_mask):
+    def forward(self, ids, mask, fts, code_lens):
         x = self.model(ids, mask)[0]
         x = torch.cat((x[:, 0, :], fts, code_lens), 1)
 
         x = self.top(x)
-        x = torch.sigmoid(x)
+        # x = torch.sigmoid(x)
+
+        return x
+
+
+class MarkdownRankModel(nn.Module):
+    def __init__(self):
+        super(MarkdownRankModel, self).__init__()
+        self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
+        self.top = nn.Linear(770, len(RANKS))
+        self.activation = nn.LogSoftmax(dim=1)
+
+    def forward(self, ids, mask, fts, code_lens):
+        x = self.model(ids, mask)[0]
+        x = torch.cat((x[:, 0, :], fts, code_lens), 1)
+
+        x = self.top(x)
+        x = self.activation(x)
 
         return x
 
