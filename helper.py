@@ -5,6 +5,7 @@ from bisect import bisect
 import nltk
 import numpy as np
 import pandas as pd
+from sklearn.metrics import accuracy_score
 import torch
 from matplotlib import pyplot as plt
 from nltk.stem import WordNetLemmatizer
@@ -393,6 +394,10 @@ def get_features_rank(df, mode='train'):
                         sub_ranks[sub_ranks < 0] = 100000
                         code_rank = np.argmin(sub_ranks) + 1
 
+                if len(ranks) < RANK_COUNT:
+                    ranks = np.concatenate(
+                        [ranks, np.ones(RANK_COUNT - len(ranks),) * ranks[-1]], 0)
+
                 if mode == 'classification':
                     if relative == 1:
                         feature = {
@@ -400,6 +405,7 @@ def get_features_rank(df, mode='train'):
                             'total_code': int(total_code),
                             'total_md': int(total_md),
                             'codes': codes,
+                            'ranks': ranks,
                             'code_rank': code_rank,
                             'mark': mark,
                             'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
@@ -413,6 +419,7 @@ def get_features_rank(df, mode='train'):
                             'total_code': int(total_code),
                             'total_md': int(total_md),
                             'codes': codes,
+                            'ranks': ranks,
                             'code_rank': code_rank,
                             'mark': mark,
                             'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
@@ -425,6 +432,7 @@ def get_features_rank(df, mode='train'):
                         'total_code': int(total_code),
                         'total_md': int(total_md),
                         'codes': codes,
+                        'ranks': ranks,
                         'code_rank': code_rank,
                         'mark': mark,
                         'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
@@ -559,7 +567,7 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
             if max_score == 0 or one_count > 1:
                 final_pred[cell_id] = mark_dict[cell_id] * sub_df.shape[0]
             else:
-                if RANKS[pred[index]['code_rank']] == 0:
+                if RANKS[pred[max_index]] == 0:
                     final_pred[cell_id] = 0
                 else:
                     rank_index = RANKS[pred[max_index]] - 1
@@ -855,3 +863,64 @@ def plot_cosin_distance(X, y):
     plt.xlabel("X-axis")
     plt.ylabel("Y-axis")
     plt.show()
+
+
+def cal_kendall_tau_rank_inference(df, mark_dict, final_pred, df_orders):
+    df.loc[df['cell_type'] == 'code',
+           'pred'] = df[df.cell_type == 'code']['rank']
+
+    marks = df.loc[df['cell_type'] == 'markdown']['cell_id'].to_list()
+    for mark in marks:
+        if mark not in final_pred:
+            final_pred[mark] = mark_dict[mark]
+
+    pred = []
+    cell_ids = []
+    for cell_id in final_pred.keys():
+        cell_ids.append(cell_id)
+        pred.append(final_pred[cell_id])
+
+    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
+                                    'cell_id', 'markdown_pred'])
+    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
+
+    df.loc[df['cell_type'] == 'markdown',
+           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
+
+    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
+    y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+    print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+
+
+def validate_rank_inference(model, val_loader, device):
+    model.eval()
+
+    tbar = tqdm(val_loader, file=sys.stdout)
+
+    preds = []
+    targets = []
+    mark_ids = []
+    mark_dict = {}
+    rank_list = []
+
+    with torch.no_grad():
+        for _, (ids, mask, fts, code_len, target, cell_id, ranks) in enumerate(tbar):
+            ranks = ranks.detach().cpu().numpy().tolist()
+            with torch.cuda.amp.autocast():
+                pred = model(ids.to(device), mask.to(device),
+                             fts.to(device), code_len.to(device))
+            pred = torch.argmax(pred, dim=1)
+            preds.append(pred.detach().cpu().numpy().ravel())
+            targets.append(target.detach().cpu().numpy().ravel())
+            mark_ids += [label_to_id(i) for i in cell_id]
+            rank_list += ranks
+
+    preds, targets = np.concatenate(preds), np.concatenate(targets)
+
+    for (id, pred, rank) in zip(mark_ids, preds, rank_list):
+        if pred == 0:
+            mark_dict[id] = pred
+        else:
+            mark_dict[id] = rank[pred - 1] + 1
+
+    return preds, targets, accuracy_score(targets, preds), mark_dict
