@@ -9,19 +9,19 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, MD_MAX_LEN, NW, SIGMOID_PATH, TOTAL_MAX_LEN,
+from config import (BS, CODE_MARK_RANK_PATH, DATA_DIR, EPOCH, MARK_PATH, MD_MAX_LEN, NW, SIGMOID_PATH, TOTAL_MAX_LEN,
                     accumulation_steps)
-from dataset import MarkdownDataset, MarkdownOnlyDataset, SigMoidDataset
-from helper import cal_kendall_tau, get_features_mark, get_features_new, get_features_val, markdown_validate, sigmoid_validate, validate
-from model import MarkdownModel, MarkdownOnlyModel, SigMoidModel
+from dataset import MarkdownOnlyDataset, MarkdownRankDataset, SigMoidDataset
+from helper import cal_kendall_tau_rank, get_features_mark, get_features_rank, validate_markdown, validate_sigmoid, validate_rank
+from model import MarkdownOnlyModel, MarkdownRankModel, SigMoidModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
 np.random.seed(0)
 torch.manual_seed(0)
 
-model = MarkdownModel()
-model.load_state_dict(torch.load(CODE_MARK_PATH))
+model = MarkdownRankModel()
+# model.load_state_dict(torch.load(CODE_MARK_PATH))
 model = model.cuda()
 
 model_sigmoid = SigMoidModel().to(device)
@@ -56,11 +56,15 @@ val_df = val_df[val_df['id'].isin(ids)]
 val_df["pct_rank"] = val_df["rank"] / \
     val_df.groupby("id")["cell_id"].transform("count")
 
-train_fts, _ = get_features_new(train_df, 'classification')
-val_fts, _ = get_features_new(val_df, 'test')
+train_fts, all_labels = get_features_rank(train_df, 'classification')
+val_fts, _ = get_features_rank(val_df, 'test')
 val_fts_only = get_features_mark(val_df, 'test')
 
-train_ds = MarkdownDataset(
+class_weights = compute_class_weight(
+    class_weight='balanced', classes=np.unique(all_labels), y=all_labels)
+class_weights = class_weights.astype(np.float32)
+
+train_ds = MarkdownRankDataset(
     dict_cellid_source, md_max_len=MD_MAX_LEN, total_max_len=TOTAL_MAX_LEN, fts=train_fts)
 val_ds = SigMoidDataset(dict_cellid_source, md_max_len=MD_MAX_LEN,
                         total_max_len=512, fts=val_fts)
@@ -74,10 +78,10 @@ val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=NW
 val_loader_only = DataLoader(val_ds_only, batch_size=BS, shuffle=False, num_workers=NW,
                              pin_memory=False, drop_last=False)
 
-acc, true, false, relative, _, _ = sigmoid_validate(
+acc, true, false, relative, _, _ = validate_sigmoid(
     model_sigmoid, val_loader, device, 0.397705)
 print('accurancy ', acc, true, false)
-mark_dict = markdown_validate(model_mark_only, val_loader_only, device)
+mark_dict = validate_markdown(model_mark_only, val_loader_only, device)
 
 
 def train(model, train_loader, val_loader, epochs):
@@ -99,7 +103,10 @@ def train(model, train_loader, val_loader, epochs):
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
                                                 num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
 
-    criterion = torch.nn.L1Loss()
+    criterion = torch.nn.NLLLoss(
+        weight=torch.tensor(class_weights).to(device),
+        reduction='mean',
+    )
     scaler = torch.cuda.amp.GradScaler()
 
     for e in range(epochs):
@@ -113,7 +120,7 @@ def train(model, train_loader, val_loader, epochs):
             with torch.cuda.amp.autocast():
                 pred = model(ids.to(device), mask.to(device),
                              fts.to(device), code_lens.to(device))
-                loss = criterion(pred, target.to(device))
+                loss = criterion(pred, torch.squeeze(target).to(device))
             scaler.scale(loss).backward()
             if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
                 scaler.step(optimizer)
@@ -130,9 +137,10 @@ def train(model, train_loader, val_loader, epochs):
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                y_pred, _, _ = validate(model, val_loader, device)
-                cal_kendall_tau(val_df, y_pred, mark_dict, relative, df_orders)
-                torch.save(model.state_dict(), CODE_MARK_PATH)
+                y_pred, _, _ = validate_rank(model, val_loader, device)
+                cal_kendall_tau_rank(
+                    val_df, y_pred, mark_dict, relative, df_orders)
+                torch.save(model.state_dict(), CODE_MARK_RANK_PATH)
                 model.train()
 
 

@@ -11,8 +11,8 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from config import (BS, CODE_MARK_PATH, DATA_DIR, EPOCH, MARK_PATH, NW, SIGMOID_PATH,
                     accumulation_steps)
 from dataset import MarkdownOnlyDataset, SigMoidDataset
-from helper import cal_kendall_tau, get_features_mark, get_features_val, markdown_validate, sigmoid_validate, validate
-from model import MarkdownModel, MarkdownOnlyModel, SigMoidModel
+from helper import get_features_mark, validate_markdown, validate_sigmoid
+from model import MarkdownOnlyModel, SigMoidModel
 
 device = 'cuda'
 torch.cuda.empty_cache()
@@ -26,10 +26,6 @@ model = model.cuda()
 model_sigmoid = SigMoidModel().to(device)
 model_sigmoid.load_state_dict(torch.load(SIGMOID_PATH))
 model_sigmoid = model_sigmoid.cuda()
-
-model_mark = MarkdownModel()
-model_mark.load_state_dict(torch.load(CODE_MARK_PATH))
-model_mark = model_mark.cuda()
 
 df_orders = pd.read_csv(
     DATA_DIR / 'train_orders.csv',
@@ -71,7 +67,7 @@ val_loader = DataLoader(val_ds, batch_size=BS, shuffle=False, num_workers=NW,
 val_full_loader = DataLoader(val_full_ds, batch_size=32, shuffle=False, num_workers=NW,
                              pin_memory=False, drop_last=False)
 
-_, relative = sigmoid_validate(
+_, relative = validate_sigmoid(
     model_sigmoid, val_full_loader, device)
 
 score, _, _ = validate(model_mark, val_full_loader, device)
@@ -125,7 +121,7 @@ def train(model, train_loader, val_loader, epochs):
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                mark_dict = markdown_validate(model, val_loader, device)
+                mark_dict = validate_markdown(model, val_loader, device)
                 cal_kendall_tau(val_df, score, mark_dict, relative, df_orders)
                 torch.save(model.state_dict(), MARK_PATH)
                 model.train()

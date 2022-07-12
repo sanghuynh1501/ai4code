@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from config import BS, CODE_MARK_RANK_PATH, DATA_DIR, MARK_PATH, MD_MAX_LEN, NW, SIGMOID_PATH
 from dataset import MarkdownOnlyDataset, MarkdownRankNewDataset, SigMoidDataset
-from helper import cal_kendall_tau_rank_inference, get_features_mark, get_features_rank, markdown_validate, preprocess_code, preprocess_text, read_notebook, sigmoid_validate, validate_rank_inference
+from helper import cal_kendall_tau_inference, get_features_mark, get_features_rank, validate_markdown, preprocess_code, preprocess_text, read_notebook, validate_sigmoid, validate_rank_inference
 
 from model import MarkdownOnlyModel, MarkdownRankModel, SigMoidModel
 
@@ -72,10 +72,10 @@ val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=NW
 val_loader_only = DataLoader(val_ds_only, batch_size=BS, shuffle=False, num_workers=NW,
                              pin_memory=False, drop_last=False)
 
-acc, true, false, relative, _, _ = sigmoid_validate(
+acc, true, false, relative, _, _ = validate_sigmoid(
     model_sigmoid, val_loader, device, 0.397705)
 print(acc, true, false)
-mark_dict = markdown_validate(model_mark_only, val_loader_only, device)
+mark_dict = validate_markdown(model_mark_only, val_loader_only, device)
 
 class_fts = []
 one_object = {}
@@ -100,4 +100,4 @@ val_loader = DataLoader(val_ds, batch_size=BS * 8, shuffle=False, num_workers=NW
 
 
 y_pred, _, acc, mark_dict = validate_rank_inference(model, val_loader, device)
-cal_kendall_tau_rank_inference(df, mark_id_dict, mark_dict, df_orders)
+cal_kendall_tau_inference(df, mark_id_dict, mark_dict, df_orders)

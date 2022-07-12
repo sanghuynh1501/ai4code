@@ -5,22 +5,6 @@ from transformers import AutoModel
 from config import BERT_MODEL_PATH, RANKS
 
 
-class MarkdownModel(nn.Module):
-    def __init__(self):
-        super(MarkdownModel, self).__init__()
-        self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
-        self.top = nn.Linear(770, 1)
-
-    def forward(self, ids, mask, fts, code_lens):
-        x = self.model(ids, mask)[0]
-        x = torch.cat((x[:, 0, :], fts, code_lens), 1)
-
-        x = self.top(x)
-        # x = torch.sigmoid(x)
-
-        return x
-
-
 class MarkdownRankModel(nn.Module):
     def __init__(self):
         super(MarkdownRankModel, self).__init__()
