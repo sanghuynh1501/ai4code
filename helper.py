@@ -168,7 +168,7 @@ def get_features_rank(df, mode='train'):
                 labels.append(relative)
                 code_ranks.append(code_rank)
 
-    return np.array(features), np.array(code_ranks)
+    return np.array(features), np.array(labels), np.array(code_ranks)
 
 
 def get_features_mark(df, mode='train'):

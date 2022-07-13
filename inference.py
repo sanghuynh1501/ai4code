@@ -60,7 +60,7 @@ df = df.sort_values('rank').reset_index(drop=True)
 df["pct_rank"] = df["rank"] / \
     df.groupby("id")["cell_id"].transform("count")
 
-val_fts, _ = get_features_rank(df, 'test')
+val_fts, _, _ = get_features_rank(df, 'test')
 val_fts_only = get_features_mark(df, 'test')
 
 val_ds = SigMoidDataset(dict_cellid_source, md_max_len=MD_MAX_LEN,

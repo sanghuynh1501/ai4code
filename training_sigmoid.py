@@ -56,8 +56,8 @@ val_df = val_df[val_df['id'].isin(ids)]
 val_df["pct_rank"] = val_df["rank"] / \
     val_df.groupby("id")["cell_id"].transform("count")
 
-train_fts, all_labels = get_features_rank(train_df, 'sigmoid')
-val_fts, _, = get_features_rank(val_df, 'test')
+train_fts, all_labels, _ = get_features_rank(train_df, 'sigmoid')
+val_fts, _, _ = get_features_rank(val_df, 'test')
 val_fts_only = get_features_mark(val_df, 'test')
 
 all_labels.sort()
