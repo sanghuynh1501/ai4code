@@ -89,6 +89,8 @@ mark_dict = validate_markdown(model_mark_only, val_loader_only, device)
 
 
 def train(model, train_loader, val_loader, epochs):
+    max_score = 0
+
     np.random.seed(0)
     # Creating optimizer and lr schedulers
     param_optimizer = list(model.named_parameters())
@@ -139,12 +141,17 @@ def train(model, train_loader, val_loader, epochs):
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
             if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
-                acc, true, false, relative, _, _ = validate_sigmoid(
-                    model, val_loader, device, 0.397705)
-                print('accurancy ', acc, true, false)
-                cal_kendall_tau_rank(
+                relative, _ = validate_sigmoid(
+                    model, val_loader, device)
+
+                kendall_score = cal_kendall_tau_rank(
                     val_df, score, mark_dict, relative, df_orders)
-                torch.save(model.state_dict(), SIGMOID_PATH)
+
+                print('score ', kendall_score)
+                if kendall_score > max_score:
+                    # torch.save(model.state_dict(), SIGMOID_PATH)
+                    max_score = kendall_score
+
                 model.train()
 
 

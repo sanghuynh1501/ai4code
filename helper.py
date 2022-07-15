@@ -232,29 +232,37 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
         for i in range(0, mark_sub_df_all.shape[0]):
             max_score = 0
             max_index = 0
-            one_count = 0
             max_j = 0
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 if relative[index] >= max_score:
                     max_score = relative[index]
                     max_index = index
-                    one_count += 1
                     max_j = j
                 index += 1
             cell_id = mark_sub_df_all.iloc[i]['cell_id']
-            if max_score == 0 or one_count > 1:
-                final_pred[cell_id] = mark_dict[cell_id] * sub_df.shape[0]
+            if RANKS[pred[max_index]] == 0:
+                final_pred[cell_id] = -100
             else:
-                if RANKS[pred[max_index]] == 0:
-                    final_pred[cell_id] = 0
+                rank_index = RANKS[pred[max_index]] - 1
+                code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
+                if rank_index < code_sub_df.shape[0]:
+                    final_pred[cell_id] = code_sub_df.iloc[rank_index]['rank'] + 1
                 else:
-                    rank_index = RANKS[pred[max_index]] - 1
-                    code_sub_df = code_sub_df_all[max_j: max_j + RANK_COUNT]
-                    if rank_index < code_sub_df.shape[0]:
-                        final_pred[cell_id] = code_sub_df.iloc[rank_index]['rank'] + 1
-                    else:
-                        final_pred[cell_id] = mark_dict[cell_id] * \
-                            sub_df.shape[0]
+                    final_pred[cell_id] = code_sub_df.iloc[-1]['rank'] + 1
+
+    for _, sub_df in tqdm(df.groupby('id')):
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        cell_ids = mark_sub_df_all['cell_id'].to_list()
+
+        for i in range(len(cell_ids) - 1):
+            if final_pred[cell_ids[i]] == final_pred[cell_ids[i + 1]]:
+                equal_list = [cell_ids[i]]
+                for j in range(i + 1, len(cell_ids)):
+                    if final_pred[cell_ids[j]] == final_pred[cell_ids[i]]:
+                        equal_list.append(cell_ids[j])
+                equal_list.sort(key=lambda id: mark_dict[id])
+                for i, id in enumerate(equal_list):
+                    final_pred[id] += i / 10
 
     pred = []
     cell_ids = []
@@ -271,24 +279,17 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
 
     df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
     y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
-    print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+
+    return kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
 
-def validate_sigmoid(model, val_loader, device, threshold=0.5):
+def validate_sigmoid(model, val_loader, device):
     model.eval()
 
     tbar = tqdm(val_loader, file=sys.stdout)
 
-    total = 0
-    zero_total = 0
-    one_total = 0
-
-    total_true = 0
-    total_zero_true = 0
-    total_one_true = 0
     relatives = []
 
-    preds = []
     targets = []
 
     with torch.no_grad():
@@ -304,36 +305,13 @@ def validate_sigmoid(model, val_loader, device, threshold=0.5):
             pred = torch.sigmoid(pred)
             pred = pred.detach().cpu().numpy().ravel()
             pred[code_len_indexs] = 1.0
-            preds += pred.tolist()
 
-            pred = (pred >= threshold).astype(np.int8)
-            # pred = (pred | code_lens).astype(np.int8)
-            # pred = pred + code_lens
-            # pred = np.clip(pred, 0, 1)
             relatives += pred.tolist()
 
             target = target.detach().cpu().numpy().ravel()
             targets += target.tolist()
 
-            zero_indexes = np.nonzero(target == 0)[0]
-            one_indexes = np.nonzero(target == 1)[0]
-
-            zero_target = target[zero_indexes]
-            one_target = target[one_indexes]
-
-            zero_pred = pred[zero_indexes]
-            one_pred = pred[one_indexes]
-
-            zero_total += len(zero_target)
-            one_total += len(one_target)
-            total += len(target)
-
-            total_zero_true += np.sum((zero_pred ==
-                                       zero_target).astype(np.int8))
-            total_one_true += np.sum((one_pred == one_target).astype(np.int8))
-            total_true += np.sum((pred == target).astype(np.int8))
-
-    return total_true / total, total_zero_true / zero_total, total_one_true / one_total, relatives, targets, preds
+    return relatives, targets
 
 
 def validate_rank(model, val_loader, device):
@@ -450,3 +428,39 @@ def validate_rank_inference(model, val_loader, device):
             mark_dict[id] = rank[pred - 1] + 1
 
     return preds, targets, accuracy_score(targets, preds), mark_dict
+
+
+def get_features_new(df, mode='train'):
+
+    features = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for _, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+        ranks = code_sub_df_all['rank'].values
+
+        for i in range(0, mark_sub_df_all.shape[0]):
+            mark = mark_sub_df_all.iloc[i]['cell_id']
+            rank = mark_sub_df_all.iloc[i]['pct_rank']
+
+            sub_ranks = rank - ranks
+            sub_ranks[sub_ranks < 0] = 100000
+            min_index = np.argmin(sub_ranks)
+
+            code_rank = 0
+            if sub_ranks[min_index] == 100000:
+                code_rank = ((rank - ranks[0]) / 10)
+            else:
+                code_rank = (
+                    min_index + sub_ranks[min_index] / 10)
+
+            feature = {
+                'mark': mark,
+                'pct_rank': code_rank / len(ranks)
+            }
+
+            features.append(feature)
+
+    return features
