@@ -1,7 +1,9 @@
 csv
 data
+data.zip
 AI4Code
 data_dump
 json_data
 weights
 __pycache__
+extra_data.csv

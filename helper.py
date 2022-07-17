@@ -1,3 +1,4 @@
+import math
 import re
 import sys
 from bisect import bisect
@@ -169,6 +170,19 @@ def get_features_rank(df, mode='train'):
                 code_ranks.append(code_rank)
 
     return np.array(features), np.array(labels), np.array(code_ranks)
+
+
+def get_code_lens(df):
+
+    code_lens = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    for id, sub_df in tqdm(df.groupby('id')):
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+        total_code_len = len(code_sub_df_all)
+        code_lens.append(math.ceil(total_code_len / RANK_COUNT))
+
+    return code_lens
 
 
 def get_features_mark(df, mode='train'):
@@ -428,39 +442,3 @@ def validate_rank_inference(model, val_loader, device):
             mark_dict[id] = rank[pred - 1] + 1
 
     return preds, targets, accuracy_score(targets, preds), mark_dict
-
-
-def get_features_new(df, mode='train'):
-
-    features = []
-    df = df.sort_values('rank').reset_index(drop=True)
-
-    for _, sub_df in tqdm(df.groupby('id')):
-
-        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
-        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
-        ranks = code_sub_df_all['rank'].values
-
-        for i in range(0, mark_sub_df_all.shape[0]):
-            mark = mark_sub_df_all.iloc[i]['cell_id']
-            rank = mark_sub_df_all.iloc[i]['pct_rank']
-
-            sub_ranks = rank - ranks
-            sub_ranks[sub_ranks < 0] = 100000
-            min_index = np.argmin(sub_ranks)
-
-            code_rank = 0
-            if sub_ranks[min_index] == 100000:
-                code_rank = ((rank - ranks[0]) / 10)
-            else:
-                code_rank = (
-                    min_index + sub_ranks[min_index] / 10)
-
-            feature = {
-                'mark': mark,
-                'pct_rank': code_rank / len(ranks)
-            }
-
-            features.append(feature)
-
-    return features

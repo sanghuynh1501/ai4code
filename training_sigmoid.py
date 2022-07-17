@@ -1,4 +1,5 @@
 import pickle
+import random
 import sys
 
 import numpy as np
@@ -39,16 +40,25 @@ df_orders = pd.read_csv(
 ).str.split()
 
 train_df = pd.read_csv('data_dump/train_df.csv')
+train_extra_df = pd.read_csv('data_dump/train_extra_df.csv')
 val_df = pd.read_csv('data_dump/val_df.csv')
 with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
     dict_cellid_source = pickle.load(f)
 f.close()
-
+with open('data_dump/dict_cellid_source_extra.pkl', 'rb') as f:
+    dict_cellid_source_extra = pickle.load(f)
+f.close()
+dict_cellid_source = {**dict_cellid_source, **dict_cellid_source_extra}
 # unique_ids = pd.unique(train_df['id'])
 # ids = unique_ids[:100]
 # train_df = train_df[train_df['id'].isin(ids)]
 train_df["pct_rank"] = train_df["rank"] / \
     train_df.groupby("id")["cell_id"].transform("count")
+
+unique_ids = pd.unique(train_extra_df['id'])
+ids = unique_ids[:100000]
+train_extra_df = train_extra_df[train_extra_df['id'].isin(ids)]
+train_df = pd.concat([train_df, train_extra_df], ignore_index=True)
 
 unique_ids = pd.unique(val_df['id'])
 ids = unique_ids[:100]
@@ -57,6 +67,8 @@ val_df["pct_rank"] = val_df["rank"] / \
     val_df.groupby("id")["cell_id"].transform("count")
 
 train_fts, all_labels, _ = get_features_rank(train_df, 'sigmoid')
+random.shuffle(train_fts)
+random.shuffle(train_fts)
 val_fts, _, _ = get_features_rank(val_df, 'test')
 val_fts_only = get_features_mark(val_df, 'test')
 
@@ -149,7 +161,7 @@ def train(model, train_loader, val_loader, epochs):
 
                 print('score ', kendall_score)
                 if kendall_score > max_score:
-                    # torch.save(model.state_dict(), SIGMOID_PATH)
+                    torch.save(model.state_dict(), SIGMOID_PATH)
                     max_score = kendall_score
 
                 model.train()
