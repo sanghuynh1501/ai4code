@@ -31,7 +31,6 @@ class MarkdownOnlyModel(nn.Module):
     def forward(self, ids, mask):
         x = self.distill_bert(ids, mask)[0]
         x = self.top(x[:, 0, :])
-        x = torch.sigmoid(x)
 
         return x
 

@@ -14,7 +14,7 @@ def gen_code():
     return res
 
 
-df = pd.read_csv('extra_data.csv')
+df = pd.read_csv('AI4Code/extra_data.csv')
 df_length = df.shape[0]
 codes = [gen_code() for _ in range(df_length)]
 
