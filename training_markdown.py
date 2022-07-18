@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AdamW, get_linear_schedule_with_warmup
-from config import BS, CODE_MARK_RANK_PATH, EPOCH, MARK_PATH, NW, SIGMOID_PATH, accumulation_steps
+from config import BS, CODE_MARK_RANK_PATH, EPOCH, MARK_PATH, NW, SIGMOID_PATH, ACCUMULATION_STEPS
 from dataset import MarkdownOnlyDataset, SigMoidDataset
 
 from helper import cal_kendall_tau_rank, get_features_mark, get_features_rank, validate_markdown, validate_rank, validate_sigmoid
@@ -88,7 +88,7 @@ def train(model, train_loader, val_loader, epochs):
     ]
 
     num_train_optimization_steps = int(
-        epochs * len(train_loader) / accumulation_steps)
+        epochs * len(train_loader) / ACCUMULATION_STEPS)
     optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
                       correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
@@ -109,7 +109,7 @@ def train(model, train_loader, val_loader, epochs):
                 loss = criterion(pred, target.to(device))
 
             scaler.scale(loss).backward()
-            if idx % accumulation_steps == 0 or idx == len(tbar) - 1:
+            if idx % ACCUMULATION_STEPS == 0 or idx == len(tbar) - 1:
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()

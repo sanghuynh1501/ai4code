@@ -2,7 +2,7 @@ import math
 import re
 import sys
 from bisect import bisect
-
+from langdetect import detect
 import nltk
 import numpy as np
 import pandas as pd
@@ -75,7 +75,7 @@ def check_code_by_rank(rank, full_codes_ranks):
     return rank in full_codes_ranks
 
 
-def get_features_rank(df, mode='train'):
+def get_features_rank(df, dict_cellid_source, mode='train'):
 
     features = []
     labels = []
@@ -90,15 +90,16 @@ def get_features_rank(df, mode='train'):
         total_md = mark_sub_df_all.shape[0]
 
         for i in range(0, mark_sub_df_all.shape[0]):
+
+            mark = mark_sub_df_all.iloc[i]['cell_id']
+            rank = mark_sub_df_all.iloc[i]['rank']
+
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
                 code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
 
                 codes = code_sub_df['cell_id'].to_list()
                 ranks = code_sub_df['rank'].values
                 total_code = code_sub_df.shape[0]
-
-                mark = mark_sub_df_all.iloc[i]['cell_id']
-                rank = mark_sub_df_all.iloc[i]['rank']
 
                 min_rank = 0 if j == 0 else ranks[0]
                 max_rank = ranks[-1]
@@ -140,7 +141,7 @@ def get_features_rank(df, mode='train'):
                         }
                         features.append(feature)
                 elif mode == 'sigmoid':
-                    if total_code_len > RANK_COUNT:
+                    if total_code_len > RANK_COUNT and str(dict_cellid_source[mark]) != '':
                         feature = {
                             'total_code': int(total_code),
                             'total_md': int(total_md),
