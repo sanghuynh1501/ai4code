@@ -1,25 +1,28 @@
 import torch
 import torch.nn as nn
 from transformers import AutoModel
-
+import torch.nn.functional as F
 from config import BERT_MODEL_PATH, RANKS
 
 
-class MarkdownRankModel(nn.Module):
+class MarkdownTwoStageModel(nn.Module):
     def __init__(self):
-        super(MarkdownRankModel, self).__init__()
+        super(MarkdownTwoStageModel, self).__init__()
         self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
-        self.top = nn.Linear(770, len(RANKS))
+        self.sigmoid_top = nn.Linear(770, 1)
+        self.class_top = nn.Linear(771, len(RANKS))
         self.activation = nn.LogSoftmax(dim=1)
 
     def forward(self, ids, mask, fts, code_lens):
         x = self.model(ids, mask)[0]
         x = torch.cat((x[:, 0, :], fts, code_lens), 1)
+        sigmoid_x = self.sigmoid_top(x)
+        x = torch.cat((x, sigmoid_x), 1)
 
-        x = self.top(x)
-        x = self.activation(x)
+        class_x = self.class_top(x)
+        class_x = self.activation(class_x)
 
-        return x
+        return sigmoid_x, class_x
 
 
 class MarkdownOnlyModel(nn.Module):
@@ -32,17 +35,4 @@ class MarkdownOnlyModel(nn.Module):
         x = self.distill_bert(ids, mask)[0]
         x = self.top(x[:, 0, :])
 
-        return x
-
-
-class SigMoidModel(nn.Module):
-    def __init__(self):
-        super(SigMoidModel, self).__init__()
-        self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
-        self.top = nn.Linear(770, 1)
-
-    def forward(self, ids, mask, fts, code_lens):
-        x = self.model(ids, mask)[0]
-        x = torch.cat((x[:, 0, :], fts, code_lens), 1)
-        x = self.top(x)
         return x

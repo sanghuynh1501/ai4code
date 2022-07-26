@@ -1,4 +1,5 @@
 import math
+import random
 import re
 import sys
 from bisect import bisect
@@ -95,6 +96,8 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
             rank = mark_sub_df_all.iloc[i]['rank']
 
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                if j > 0:
+                    j -= 1
                 code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
 
                 codes = code_sub_df['cell_id'].to_list()
@@ -120,6 +123,8 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
                         sub_ranks = rank - ranks
                         sub_ranks[sub_ranks < 0] = 100000
                         code_rank = np.argmin(sub_ranks) + 1
+                else:
+                    code_rank = RANKS[-1]
 
                 if len(ranks) < RANK_COUNT:
                     ranks = np.concatenate(
@@ -154,6 +159,20 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
                             'total_code_len': total_code_len
                         }
                         features.append(feature)
+                elif mode == 'train':
+                    if str(dict_cellid_source[mark]) != '':
+                        feature = {
+                            'total_code': int(total_code),
+                            'total_md': int(total_md),
+                            'codes': codes,
+                            'ranks': ranks,
+                            'code_rank': code_rank,
+                            'mark': mark,
+                            'pct_rank': mark_sub_df_all.iloc[i]['pct_rank'],
+                            'relative': relative,
+                            'total_code_len': total_code_len
+                        }
+                        features.append(feature)
                 else:
                     feature = {
                         'total_code': int(total_code),
@@ -167,6 +186,7 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
                         'total_code_len': total_code_len
                     }
                     features.append(feature)
+
                 labels.append(relative)
                 code_ranks.append(code_rank)
 
@@ -248,12 +268,16 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
             max_score = 0
             max_index = 0
             max_j = 0
+
             for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
+                if j > 0:
+                    j -= 1
                 if relative[index] >= max_score:
                     max_score = relative[index]
                     max_index = index
                     max_j = j
                 index += 1
+
             cell_id = mark_sub_df_all.iloc[i]['cell_id']
             if RANKS[pred[max_index]] == 0:
                 final_pred[cell_id] = -100
@@ -263,7 +287,8 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
                 if rank_index < code_sub_df.shape[0]:
                     final_pred[cell_id] = code_sub_df.iloc[rank_index]['rank'] + 1
                 else:
-                    final_pred[cell_id] = code_sub_df.iloc[-1]['rank'] + 1
+                    # final_pred[cell_id] = code_sub_df.iloc[-1]['rank'] + 1
+                    final_pred[cell_id] = mark_dict[cell_id] * sub_df.shape[0]
 
     for _, sub_df in tqdm(df.groupby('id')):
         mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
@@ -329,29 +354,38 @@ def validate_sigmoid(model, val_loader, device):
     return relatives, targets
 
 
-def validate_rank(model, val_loader, device):
+def validate_rank(model, val_loader, scriterion, ccriterion, device):
     model.eval()
+    total_loss = 0
+    total_step = 0
 
     tbar = tqdm(val_loader, file=sys.stdout)
 
     preds = []
-    targets = []
-    code_lens = []
+    relatives = []
 
     with torch.no_grad():
-        for idx, (ids, mask, fts, _, code_len, target, _, total_code_len) in enumerate(tbar):
+        for idx, (ids, mask, fts, code_len, target, realtive) in enumerate(tbar):
             with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_len.to(device))
-            pred = torch.argmax(pred, dim=1)
+                spred, cped = model(ids.to(device), mask.to(device),
+                                    fts.to(device), code_len.to(device))
+
+                loss = (scriterion(spred, realtive.to(device)) +
+                        ccriterion(cped, torch.squeeze(target).to(device))) / 2
+
+            total_loss += loss.detach().cpu().item()
+            total_step += 1
+
+            pred = torch.argmax(cped, dim=1)
+            relative = torch.sigmoid(spred)
+
             preds.append(pred.detach().cpu().numpy().ravel())
-            targets.append(target.detach().cpu().numpy().ravel())
-            code_lens.append(total_code_len.detach().cpu().numpy().ravel())
+            relatives.append(relative.detach().cpu().numpy().ravel())
 
-    preds, targets, code_lens = np.concatenate(
-        preds), np.concatenate(targets), np.concatenate(code_lens)
+    preds, relatives = np.concatenate(preds), np.concatenate(relatives)
+    avg_loss = np.round(total_loss / total_step, 4)
 
-    return preds, targets, 0
+    return preds, relatives, avg_loss
 
 
 def validate_markdown(model, val_loader, device):
@@ -443,3 +477,140 @@ def validate_rank_inference(model, val_loader, device):
             mark_dict[id] = rank[pred - 1] + 1
 
     return preds, targets, accuracy_score(targets, preds), mark_dict
+
+
+def get_features(df, dict_cellid_source, mode='train'):
+
+    features = []
+    labels = []
+    code_ranks = []
+    df = df.sort_values('rank').reset_index(drop=True)
+    rows = []
+
+    for id, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        mark_ids = mark_sub_df_all['cell_id'].to_list()
+        mark_ranks = mark_sub_df_all['rank'].to_list()
+
+        code_ids = code_sub_df_all['cell_id'].to_list()
+        code_ranks = code_sub_df_all['rank'].to_list()
+        rows += (mark_ids + code_ids)
+
+        for i in range(0, len(mark_ids)):
+            for j in range(0, len(code_ids)):
+                if j < len(code_ids) - 1:
+                    if mark_ranks[i] > code_ranks[j] and mark_ranks[i] < code_ranks[j + 1]:
+                        feature = {
+                            'mark': mark_ids[i],
+                            'code': code_ids[j],
+                            'relative': 1
+                        }
+
+                        if mode == 'train' and str(dict_cellid_source[feature['mark']]) != '':
+                            features.append(feature)
+                            labels.append(feature['relative'])
+                        else:
+                            features.append(feature)
+                            labels.append(feature['relative'])
+
+                    else:
+                        if mode == 'train':
+                            if random.random() < 0.1 and str(dict_cellid_source[feature['mark']]) != '':
+                                feature = {
+                                    'mark': mark_ids[i],
+                                    'code': code_ids[j],
+                                    'relative': 0
+                                }
+                                features.append(feature)
+                                labels.append(feature['relative'])
+                        else:
+                            feature = {
+                                'mark': mark_ids[i],
+                                'code': code_ids[j],
+                                'relative': 0
+                            }
+                            features.append(feature)
+                            labels.append(feature['relative'])
+
+                elif mark_ranks[i] > code_ranks[j]:
+                    feature = {
+                        'mark': mark_ids[i],
+                        'code': code_ids[j],
+                        'relative': 1
+                    }
+
+                    if mode == 'train' and str(dict_cellid_source[feature['mark']]) != '':
+                        features.append(feature)
+                        labels.append(feature['relative'])
+                    else:
+                        features.append(feature)
+                        labels.append(feature['relative'])
+
+                else:
+                    if mode == 'train':
+                        if random.random() < 0.1 and str(dict_cellid_source[feature['mark']]) != '':
+                            feature = {
+                                'mark': mark_ids[i],
+                                'code': code_ids[j],
+                                'relative': 0
+                            }
+                            features.append(feature)
+                            labels.append(feature['relative'])
+                    else:
+                        feature = {
+                            'mark': mark_ids[i],
+                            'code': code_ids[j],
+                            'relative': 0
+                        }
+
+                        features.append(feature)
+                        labels.append(feature['relative'])
+
+    return np.array(features), np.array(labels), rows
+
+
+def test_features(df, pred):
+
+    code_ranks = []
+    df = df.sort_values('rank').reset_index(drop=True)
+
+    index = 0
+    final_pred = {}
+
+    df.loc[df['cell_type'] == 'code',
+           'pred'] = df[df.cell_type == 'code']['rank']
+
+    for id, sub_df in tqdm(df.groupby('id')):
+
+        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
+        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
+
+        mark_ids = mark_sub_df_all['cell_id'].to_list()
+
+        code_ids = code_sub_df_all['cell_id'].to_list()
+        code_ranks = code_sub_df_all['rank'].to_list()
+
+        for i in range(0, len(mark_ids)):
+            cell_id = mark_sub_df_all.iloc[i]['cell_id']
+            for j in range(0, len(code_ids)):
+                if pred[index]['relative'] == 1:
+                    final_pred[cell_id] = code_ranks[j]
+                index += 1
+
+    pred = []
+    cell_ids = []
+    for cell_id in final_pred.keys():
+        cell_ids.append(cell_id)
+        pred.append(final_pred[cell_id])
+
+    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
+                                    'cell_id', 'markdown_pred'])
+    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
+
+    df.loc[df['cell_type'] == 'markdown',
+           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
+
+    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
