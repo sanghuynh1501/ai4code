@@ -1,13 +1,9 @@
-import math
-import random
 import re
 import sys
 from bisect import bisect
-from langdetect import detect
 import nltk
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score
 import torch
 from nltk.stem import WordNetLemmatizer
 from tqdm import tqdm
@@ -193,19 +189,6 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
     return np.array(features), np.array(labels), np.array(code_ranks)
 
 
-def get_code_lens(df):
-
-    code_lens = []
-    df = df.sort_values('rank').reset_index(drop=True)
-
-    for id, sub_df in tqdm(df.groupby('id')):
-        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
-        total_code_len = len(code_sub_df_all)
-        code_lens.append(math.ceil(total_code_len / RANK_COUNT))
-
-    return code_lens
-
-
 def get_features_mark(df, mode='train'):
 
     features = []
@@ -323,37 +306,6 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
     return kendall_tau(df_orders.loc[y_dummy.index], y_dummy)
 
 
-def validate_sigmoid(model, val_loader, device):
-    model.eval()
-
-    tbar = tqdm(val_loader, file=sys.stdout)
-
-    relatives = []
-
-    targets = []
-
-    with torch.no_grad():
-        for idx, (ids, mask, fts, _, code_lens, _, target, total_code_lens) in enumerate(tbar):
-            with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_lens.to(device))
-
-            code_lens = (total_code_lens.detach().cpu().numpy().ravel()
-                         <= RANK_COUNT).astype(np.int8)
-            code_len_indexs = np.nonzero(code_lens == 1)[0]
-
-            pred = torch.sigmoid(pred)
-            pred = pred.detach().cpu().numpy().ravel()
-            pred[code_len_indexs] = 1.0
-
-            relatives += pred.tolist()
-
-            target = target.detach().cpu().numpy().ravel()
-            targets += target.tolist()
-
-    return relatives, targets
-
-
 def validate_rank(model, val_loader, scriterion, ccriterion, device):
     model.eval()
     total_loss = 0
@@ -416,201 +368,3 @@ def id_to_label(ids):
 
 def label_to_id(labels):
     return ''.join([LABELS[i] for i in labels])
-
-
-def cal_kendall_tau_inference(df, mark_dict, final_pred, df_orders):
-    df.loc[df['cell_type'] == 'code',
-           'pred'] = df[df.cell_type == 'code']['rank']
-
-    marks = df.loc[df['cell_type'] == 'markdown']['cell_id'].to_list()
-    for mark in marks:
-        if mark not in final_pred:
-            final_pred[mark] = mark_dict[mark]
-
-    pred = []
-    cell_ids = []
-    for cell_id in final_pred.keys():
-        cell_ids.append(cell_id)
-        pred.append(final_pred[cell_id])
-
-    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
-                                    'cell_id', 'markdown_pred'])
-    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
-
-    df.loc[df['cell_type'] == 'markdown',
-           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
-
-    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')
-    y_dummy = df.sort_values("pred").groupby('id')['cell_id'].apply(list)
-    print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
-
-
-def validate_rank_inference(model, val_loader, device):
-    model.eval()
-
-    tbar = tqdm(val_loader, file=sys.stdout)
-
-    preds = []
-    targets = []
-    mark_ids = []
-    mark_dict = {}
-    rank_list = []
-
-    with torch.no_grad():
-        for _, (ids, mask, fts, code_len, target, cell_id, ranks) in enumerate(tbar):
-            ranks = ranks.detach().cpu().numpy().tolist()
-            with torch.cuda.amp.autocast():
-                pred = model(ids.to(device), mask.to(device),
-                             fts.to(device), code_len.to(device))
-            pred = torch.argmax(pred, dim=1)
-            preds.append(pred.detach().cpu().numpy().ravel())
-            targets.append(target.detach().cpu().numpy().ravel())
-            mark_ids += [label_to_id(i) for i in cell_id]
-            rank_list += ranks
-
-    preds, targets = np.concatenate(preds), np.concatenate(targets)
-
-    for (id, pred, rank) in zip(mark_ids, preds, rank_list):
-        if pred == 0:
-            mark_dict[id] = pred
-        else:
-            mark_dict[id] = rank[pred - 1] + 1
-
-    return preds, targets, accuracy_score(targets, preds), mark_dict
-
-
-def get_features(df, dict_cellid_source, mode='train'):
-
-    features = []
-    labels = []
-    code_ranks = []
-    df = df.sort_values('rank').reset_index(drop=True)
-    rows = []
-
-    for id, sub_df in tqdm(df.groupby('id')):
-
-        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
-        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
-
-        mark_ids = mark_sub_df_all['cell_id'].to_list()
-        mark_ranks = mark_sub_df_all['rank'].to_list()
-
-        code_ids = code_sub_df_all['cell_id'].to_list()
-        code_ranks = code_sub_df_all['rank'].to_list()
-        rows += (mark_ids + code_ids)
-
-        for i in range(0, len(mark_ids)):
-            for j in range(0, len(code_ids)):
-                if j < len(code_ids) - 1:
-                    if mark_ranks[i] > code_ranks[j] and mark_ranks[i] < code_ranks[j + 1]:
-                        feature = {
-                            'mark': mark_ids[i],
-                            'code': code_ids[j],
-                            'relative': 1
-                        }
-
-                        if mode == 'train' and str(dict_cellid_source[feature['mark']]) != '':
-                            features.append(feature)
-                            labels.append(feature['relative'])
-                        else:
-                            features.append(feature)
-                            labels.append(feature['relative'])
-
-                    else:
-                        if mode == 'train':
-                            if random.random() < 0.1 and str(dict_cellid_source[feature['mark']]) != '':
-                                feature = {
-                                    'mark': mark_ids[i],
-                                    'code': code_ids[j],
-                                    'relative': 0
-                                }
-                                features.append(feature)
-                                labels.append(feature['relative'])
-                        else:
-                            feature = {
-                                'mark': mark_ids[i],
-                                'code': code_ids[j],
-                                'relative': 0
-                            }
-                            features.append(feature)
-                            labels.append(feature['relative'])
-
-                elif mark_ranks[i] > code_ranks[j]:
-                    feature = {
-                        'mark': mark_ids[i],
-                        'code': code_ids[j],
-                        'relative': 1
-                    }
-
-                    if mode == 'train' and str(dict_cellid_source[feature['mark']]) != '':
-                        features.append(feature)
-                        labels.append(feature['relative'])
-                    else:
-                        features.append(feature)
-                        labels.append(feature['relative'])
-
-                else:
-                    if mode == 'train':
-                        if random.random() < 0.1 and str(dict_cellid_source[feature['mark']]) != '':
-                            feature = {
-                                'mark': mark_ids[i],
-                                'code': code_ids[j],
-                                'relative': 0
-                            }
-                            features.append(feature)
-                            labels.append(feature['relative'])
-                    else:
-                        feature = {
-                            'mark': mark_ids[i],
-                            'code': code_ids[j],
-                            'relative': 0
-                        }
-
-                        features.append(feature)
-                        labels.append(feature['relative'])
-
-    return np.array(features), np.array(labels), rows
-
-
-def test_features(df, pred):
-
-    code_ranks = []
-    df = df.sort_values('rank').reset_index(drop=True)
-
-    index = 0
-    final_pred = {}
-
-    df.loc[df['cell_type'] == 'code',
-           'pred'] = df[df.cell_type == 'code']['rank']
-
-    for id, sub_df in tqdm(df.groupby('id')):
-
-        mark_sub_df_all = sub_df[sub_df.cell_type == 'markdown']
-        code_sub_df_all = sub_df[sub_df.cell_type == 'code']
-
-        mark_ids = mark_sub_df_all['cell_id'].to_list()
-
-        code_ids = code_sub_df_all['cell_id'].to_list()
-        code_ranks = code_sub_df_all['rank'].to_list()
-
-        for i in range(0, len(mark_ids)):
-            cell_id = mark_sub_df_all.iloc[i]['cell_id']
-            for j in range(0, len(code_ids)):
-                if pred[index]['relative'] == 1:
-                    final_pred[cell_id] = code_ranks[j]
-                index += 1
-
-    pred = []
-    cell_ids = []
-    for cell_id in final_pred.keys():
-        cell_ids.append(cell_id)
-        pred.append(final_pred[cell_id])
-
-    df_markdown_pred = pd.DataFrame(list(zip(cell_ids, pred)), columns=[
-                                    'cell_id', 'markdown_pred'])
-    df = df.merge(df_markdown_pred, on=['cell_id'], how='outer')
-
-    df.loc[df['cell_type'] == 'markdown',
-           'pred'] = df.loc[df['cell_type'] == 'markdown']['markdown_pred']
-
-    df[['id', 'cell_id', 'cell_type', 'rank', 'pred']].to_csv('predict.csv')

@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from transformers import AutoModel
-import torch.nn.functional as F
 from config import BERT_MODEL_PATH, RANKS
 
 
