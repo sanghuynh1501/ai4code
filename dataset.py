@@ -1,5 +1,5 @@
 import torch
-from config import BERT_MODEL_PATH, CODE_MAX_LEN, RANK_COUNT, RANKS
+from config import BERT_MODEL_PATH, CODE_MAX_LEN, RANK_COUNT
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 

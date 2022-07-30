@@ -253,7 +253,7 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
             max_score = 0
             max_index = 0
             max_j = 0
-            
+
             j = 0
             while j < code_sub_df_all.shape[0]:
                 if relative[index] >= max_score:
