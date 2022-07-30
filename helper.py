@@ -91,9 +91,8 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
             mark = mark_sub_df_all.iloc[i]['cell_id']
             rank = mark_sub_df_all.iloc[i]['rank']
 
-            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
-                if j > 0:
-                    j -= 1
+            j = 0
+            while j < code_sub_df_all.shape[0]:
                 code_sub_df = code_sub_df_all[j: j + RANK_COUNT]
 
                 codes = code_sub_df['cell_id'].to_list()
@@ -186,6 +185,9 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
                 labels.append(relative)
                 code_ranks.append(code_rank)
 
+                j -= 1
+                j += RANK_COUNT
+
     return np.array(features), np.array(labels), np.array(code_ranks)
 
 
@@ -251,15 +253,16 @@ def cal_kendall_tau_rank(df, pred, mark_dict, relative, df_orders):
             max_score = 0
             max_index = 0
             max_j = 0
-
-            for j in range(0, code_sub_df_all.shape[0], RANK_COUNT):
-                if j > 0:
-                    j -= 1
+            
+            j = 0
+            while j < code_sub_df_all.shape[0]:
                 if relative[index] >= max_score:
                     max_score = relative[index]
                     max_index = index
                     max_j = j
                 index += 1
+                j -= 1
+                j += RANK_COUNT
 
             cell_id = mark_sub_df_all.iloc[i]['cell_id']
             if RANKS[pred[max_index]] == 0:
