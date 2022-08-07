@@ -38,6 +38,8 @@ df_orders = pd.read_csv(
 
 train_df = pd.read_csv('data_dump/train_df.csv')
 train_extra_df = pd.read_csv('data_dump/train_extra_df.csv')
+train_extra_df_1 = pd.read_csv('data_dump/train_extra_df_1.csv')
+train_extra_df_2 = pd.read_csv('data_dump/train_extra_df_2.csv')
 val_df = pd.read_csv('data_dump/val_df.csv')
 
 with open('data_dump/dict_cellid_source.pkl', 'rb') as f:
@@ -48,20 +50,36 @@ with open('data_dump/dict_cellid_source_extra.pkl', 'rb') as f:
     dict_cellid_source_extra = pickle.load(f)
 f.close()
 
+with open('data_dump/dict_cellid_source_extra_1.pkl', 'rb') as f:
+    dict_cellid_source_extra_1 = pickle.load(f)
+f.close()
+
+with open('data_dump/dict_cellid_source_extra_2.pkl', 'rb') as f:
+    dict_cellid_source_extra_2 = pickle.load(f)
+f.close()
+
 # unique_ids = pd.unique(train_df['id'])
 # ids = unique_ids[:100]
 # train_df = train_df[train_df['id'].isin(ids)]
 train_df["pct_rank"] = train_df["rank"] / \
     train_df.groupby("id")["cell_id"].transform("count")
 
-train_df = pd.concat([train_df, train_extra_df], ignore_index=True)
-dict_cellid_source = {**dict_cellid_source, **dict_cellid_source_extra}
+train_df = pd.concat(
+    [train_df, train_extra_df, train_extra_df_1, train_extra_df_2], ignore_index=True)
+dict_cellid_source = {**dict_cellid_source, **
+                      dict_cellid_source_extra, **dict_cellid_source_extra_1, **dict_cellid_source_extra_2}
 
 unique_ids = pd.unique(val_df['id'])
-ids = unique_ids[:100]
+ids = unique_ids[:1000]
 val_df = val_df[val_df['id'].isin(ids)]
 val_df["pct_rank"] = val_df["rank"] / \
     val_df.groupby("id")["cell_id"].transform("count")
+
+train_ids = unique_ids[1000:]
+extra_df = val_df[val_df['id'].isin(train_ids)]
+extra_df["pct_rank"] = extra_df["rank"] / \
+    extra_df.groupby("id")["cell_id"].transform("count")
+train_df = pd.concat([train_df, extra_df], ignore_index=True)
 
 train_fts, all_realative, all_labels = get_features_rank(
     train_df, dict_cellid_source, 'train')
@@ -118,7 +136,7 @@ def train(model, train_loader, val_loader, epochs):
 
     num_train_optimization_steps = int(
         epochs * len(train_loader) / ACCUMULATION_STEPS)
-    optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
+    optimizer = AdamW(optimizer_grouped_parameters, lr=1.5e-5,
                       correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
                                                 num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
@@ -161,7 +179,7 @@ def train(model, train_loader, val_loader, epochs):
             tbar.set_description(
                 f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
-            if (idx + 1) % 10000 == 0 or idx == len(tbar) - 1:
+            if (idx + 1) % 100000 == 0 or idx == len(tbar) - 1:
                 score, relative, val_loss = validate_rank(
                     model, val_loader, scriterion, ccriterion, device)
 

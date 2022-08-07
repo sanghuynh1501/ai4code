@@ -19,7 +19,7 @@ class MarkdownOnlyDataset(Dataset):
         row = self.fts[index]
 
         inputs = self.tokenizer.encode_plus(
-            self.dict_cellid_source[row['mark']],
+            str(self.dict_cellid_source[row['mark']]),
             None,
             add_special_tokens=True,
             max_length=self.max_len,
@@ -50,7 +50,7 @@ class MarkdownRankDataset(Dataset):
         row = self.fts[index]
 
         inputs = self.tokenizer.encode_plus(
-            self.dict_cellid_source[row['mark']],
+            str(self.dict_cellid_source[row['mark']]),
             None,
             add_special_tokens=True,
             max_length=self.md_max_len,

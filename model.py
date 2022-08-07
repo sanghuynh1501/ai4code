@@ -11,9 +11,11 @@ class MarkdownTwoStageModel(nn.Module):
         self.sigmoid_top = nn.Linear(770, 1)
         self.class_top = nn.Linear(771, len(RANKS))
         self.activation = nn.LogSoftmax(dim=1)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, ids, mask, fts, code_lens):
         x = self.model(ids, mask)[0]
+        x = self.dropout(x)
         x = torch.cat((x[:, 0, :], fts, code_lens), 1)
         sigmoid_x = self.sigmoid_top(x)
         x = torch.cat((x, sigmoid_x), 1)

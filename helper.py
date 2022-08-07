@@ -155,7 +155,7 @@ def get_features_rank(df, dict_cellid_source, mode='train'):
                         }
                         features.append(feature)
                 elif mode == 'train':
-                    if str(dict_cellid_source[mark]) != '':
+                    if str(dict_cellid_source[mark]) != '' and str(dict_cellid_source[mark]) != 'nan':
                         feature = {
                             'total_code': int(total_code),
                             'total_md': int(total_md),
