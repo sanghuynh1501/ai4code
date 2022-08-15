@@ -1,47 +1,39 @@
 import torch
-from torch import nn
+import torch.nn as nn
 from transformers import AutoModel
+from config import BERT_MODEL_PATH, RANKS
 
 
-class ScoreModel(nn.Module):
+class MarkdownTwoStageModel(nn.Module):
     def __init__(self):
-        super(ScoreModel, self).__init__()
-        self.distill_bert = AutoModel.from_pretrained(
-            'distilbert-base-uncased')
-
-        for param in self.distill_bert.parameters():
-            param.requires_grad = False
-
-        self.out = nn.Linear(768, 1)
+        super(MarkdownTwoStageModel, self).__init__()
+        self.model = AutoModel.from_pretrained(BERT_MODEL_PATH)
+        self.sigmoid_top = nn.Linear(770, 1)
+        self.class_top = nn.Linear(771, len(RANKS))
+        self.activation = nn.LogSoftmax(dim=1)
         self.dropout = nn.Dropout(0.2)
+
+    def forward(self, ids, mask, fts, code_lens):
+        x = self.model(ids, mask)[0]
+        x = self.dropout(x)
+        x = torch.cat((x[:, 0, :], fts, code_lens), 1)
+        sigmoid_x = self.sigmoid_top(x)
+        x = torch.cat((x, sigmoid_x), 1)
+
+        class_x = self.class_top(x)
+        class_x = self.activation(class_x)
+
+        return sigmoid_x, class_x
+
+
+class MarkdownOnlyModel(nn.Module):
+    def __init__(self):
+        super(MarkdownOnlyModel, self).__init__()
+        self.distill_bert = AutoModel.from_pretrained(BERT_MODEL_PATH)
+        self.top = nn.Linear(768, 1)
 
     def forward(self, ids, mask):
         x = self.distill_bert(ids, mask)[0]
-        # x = self.dropout(x)
-        x = self.out(x[:, 0, :])
+        x = self.top(x[:, 0, :])
+
         return x
-
-
-class MarkdownModel(nn.Module):
-    def __init__(self):
-        super(MarkdownModel, self).__init__()
-        self.score_model = ScoreModel()
-
-    def forward(self, ids, mask):
-        left_ids = ids[:, 0, :]
-        right_ids = ids[:, 1, :]
-
-        left_mask = mask[:, 0, :]
-        right_mask = mask[:, 1, :]
-
-        left = self.score_model(left_ids, left_mask)
-        right = self.score_model(right_ids, right_mask)
-
-        distance = torch.subtract(left, right, alpha=1)
-
-        return torch.sigmoid(distance)
-
-    def score(self, ids, mask):
-        score = self.score_model(ids, mask)
-
-        return score

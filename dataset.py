@@ -1,89 +1,25 @@
-import random
-
 import torch
+from config import BERT_MODEL_PATH, CODE_MAX_LEN, RANK_COUNT
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
-from config import alphabet
+from helper import id_to_label
 
 
-class MarkdownDataset(Dataset):
+class MarkdownOnlyDataset(Dataset):
 
-    def __init__(self, df, data_dic, dict_cellid_source, max_len, mode='train'):
+    def __init__(self, fts, dict_cellid_source, max_len):
         super().__init__()
-        self.df = df
-        self.max_len = max_len
-        self.data_dic = data_dic
         self.dict_cellid_source = dict_cellid_source
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            'distilbert-base-uncased', do_lower_case=True)
-        self.mode = mode
+        self.max_len = max_len
+        self.tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_PATH)
+        self.fts = fts
 
     def __getitem__(self, index):
-        row = self.df[index]
-
-        note_id = row[0]
-        note = self.data_dic[note_id]
-
-        cell_id = row[1]
-        r_cell_id = cell_id
-
-        rank = row[2]
-        r_rank = rank
-
-        while r_cell_id == cell_id:
-            r_idx = random.randint(0, note['len'] - 1)
-            r_cell_id = note['source'][r_idx]
-            r_rank = note['rank'][r_idx]
-
-        label = 1 if rank > r_rank else 0
-
-        ids = []
-        masks = []
-        for id in [cell_id, r_cell_id]:
-            txt = self.dict_cellid_source[id]
-
-            inputs = self.tokenizer.encode_plus(
-                txt,
-                None,
-                add_special_tokens=True,
-                max_length=self.max_len,
-                padding="max_length",
-                return_token_type_ids=True,
-                truncation=True
-            )
-            id = torch.LongTensor(inputs['input_ids'])
-            mask = torch.LongTensor(inputs['attention_mask'])
-
-            id = torch.unsqueeze(id, 0)
-            mask = torch.unsqueeze(mask, 0)
-
-            ids.append(id)
-            masks.append(mask)
-
-        return torch.cat(ids, 0), torch.cat(masks, 0), torch.FloatTensor([label])
-
-    def __len__(self):
-        return len(self.df)
-
-
-class DatasetTest(Dataset):
-
-    def __init__(self, df, dict_cellid_source, max_len):
-        super().__init__()
-        self.df = df
-        self.max_len = max_len
-        self.dict_cellid_source = dict_cellid_source
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            'distilbert-base-uncased', do_lower_case=True)
-
-    def __getitem__(self, index):
-        text_id = self.df[index]
-
-        txt = self.dict_cellid_source[text_id]
+        row = self.fts[index]
 
         inputs = self.tokenizer.encode_plus(
-            txt,
+            str(self.dict_cellid_source[row['mark']]),
             None,
             add_special_tokens=True,
             max_length=self.max_len,
@@ -91,10 +27,76 @@ class DatasetTest(Dataset):
             return_token_type_ids=True,
             truncation=True
         )
-        id = torch.LongTensor(inputs['input_ids'])
+        ids = torch.LongTensor(inputs['input_ids'])
         mask = torch.LongTensor(inputs['attention_mask'])
 
-        return id, mask, torch.LongTensor([alphabet.index(i) for i in text_id])
+        return ids, mask, torch.FloatTensor([row['pct_rank']]), torch.LongTensor(id_to_label(row['mark']))
 
     def __len__(self):
-        return len(self.df)
+        return len(self.fts)
+
+
+class MarkdownRankDataset(Dataset):
+
+    def __init__(self, dict_cellid_source, total_max_len, md_max_len, fts):
+        super().__init__()
+        self.dict_cellid_source = dict_cellid_source
+        self.md_max_len = md_max_len
+        self.total_max_len = total_max_len  # maxlen allowed by model config
+        self.tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_PATH)
+        self.fts = fts
+
+    def __getitem__(self, index):
+        row = self.fts[index]
+
+        inputs = self.tokenizer.encode_plus(
+            str(self.dict_cellid_source[row['mark']]),
+            None,
+            add_special_tokens=True,
+            max_length=self.md_max_len,
+            padding='max_length',
+            return_token_type_ids=True,
+            truncation=True
+        )
+        codes = row['codes']
+        code_inputs = self.tokenizer.batch_encode_plus(
+            [str(self.dict_cellid_source[x]) for x in codes],
+            add_special_tokens=True,
+            max_length=CODE_MAX_LEN,
+            padding='max_length',
+            truncation=True
+        )
+        n_md = row['total_md']
+        n_code = row['total_code']
+        if n_md + n_code == 0:
+            fts = torch.FloatTensor([0])
+        else:
+            fts = torch.FloatTensor([n_md / (n_md + n_code)])
+
+        ids = inputs['input_ids']
+        for x in code_inputs['input_ids']:
+            ids.extend(x[:-1])
+        ids = ids[:self.total_max_len]
+        if len(ids) != self.total_max_len:
+            ids = ids + [self.tokenizer.pad_token_id, ] * \
+                (self.total_max_len - len(ids))
+        ids = torch.LongTensor(ids)
+
+        mask = inputs['attention_mask']
+        for x in code_inputs['attention_mask']:
+            mask.extend(x[:-1])
+        mask = mask[:self.total_max_len]
+        if len(mask) != self.total_max_len:
+            mask = mask + [self.tokenizer.pad_token_id, ] * \
+                (self.total_max_len - len(mask))
+        mask = torch.LongTensor(mask)
+
+        relative = row['relative']
+        label = row['code_rank']
+
+        assert len(ids) == self.total_max_len
+
+        return ids, mask, fts, torch.FloatTensor([len(codes) / RANK_COUNT]), torch.LongTensor([label]), torch.LongTensor([relative])
+
+    def __len__(self):
+        return len(self.fts)
